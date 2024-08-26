@@ -4,12 +4,15 @@ from datetime import datetime
 import importlib
 import pkgutil
 from db_manager import DatabaseManager
+import re
+import argparse
 
 class FirewallPolicyTracker:
-    def __init__(self):
+    def __init__(self, rxp,):
         self.db = DatabaseManager()
         self.plugins = {}
         self.load_plugins()
+        self.rxp = rxp
 
     def load_plugins(self):
         import plugins
@@ -20,6 +23,7 @@ class FirewallPolicyTracker:
 
     def process_firewall_output(self, firewall_name, output, date):
         device_type = self.detect_device_type(output)
+        output = [line for line in output.split('\n') if not any(rx.match(line) for rx in self.rxp)]
         if device_type in self.plugins:
             plugin = self.plugins[device_type]
             self.db.add_firewall(firewall_name, device_type)
@@ -61,14 +65,47 @@ def get_date_from_folder(folder_name):
 def get_file_creation_date(file_path):
     return datetime.fromtimestamp(os.path.getctime(file_path)).date()
 
+def parse_folder(args):
+    folder = args.folder
+    if not os.path.exists(folder):
+        raise FileNotFoundError(f"Folder '{folder}' does not exist.")
+    return folder
+
+def make_firewall_tracker(args):
+    ...
+
+def compile_regex_file(args):
+    rxp_file = args.rxp
+    rx_lst= [(re.compile('^#.*')),]
+    if os.path.exists(rxp_file):
+        with open(rxp_file, 'r') as f:
+            lines = f.readlines()
+        for line in lines:
+            try:
+                rx_lst.append(re.compile(line.strip()))
+            except re.error:
+                print(f"Error compiling regex: {line.strip()}")
+    else:
+        print(f"Error: Regex file '{rxp_file}' does not exist...skipping..using default regex")
+    return rx_lst
+def param_parser():
+    parser = argparse.ArgumentParser(description='Firewall Policy Tracker')
+    parser.add_argument('-f', '--folder', help='Folder to process', required=True)
+    parser.add_argument('-d', '--days', help='Days threshold for removal', type=int, default=90)
+    parser.add_argument('-r', '--rxp', help='Regex file for filtering, file stored in current folder or path to file', default='filter.rxp', required=False, dest='rxp')
+    return parser.parse_args()
+
 def main():
-    tracker = FirewallPolicyTracker()
+    args = param_parser()
+    folder = parse_folder(args)
+    rxp = compile_regex_file(args)
+
+    tracker = FirewallPolicyTracker(rxp)
     
-    folders = [f for f in os.listdir() if os.path.isdir(f)]
-    
+    folders = [f for f in os.listdir(folder) if os.path.isdir(f)]
+        
     for folder in folders:
         folder_date = get_date_from_folder(folder)
-        
         if folder_date:
             date_to_use = folder_date
             print(f"Processing folder: {folder} with date: {date_to_use}")
@@ -89,7 +126,7 @@ def main():
                 
                 tracker.process_firewall_output(firewall_name, output, date_to_use)
 
-    report = tracker.generate_report(days_threshold=30)
+    report = tracker.generate_report(days_threshold=args.days)
     
     if report:
         print("\nPolicies flagged for removal:")
