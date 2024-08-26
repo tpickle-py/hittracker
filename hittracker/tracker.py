@@ -43,6 +43,7 @@ class FirewallPolicyTracker:
             for policy_name, hit_count in policies:
                 self.db.update_policy(firewall_name, policy_name, hit_count, date)
         else:
+            print(output)
             print(f"Unsupported device type for {firewall_name}")
 
     def detect_device_type(self, output):
