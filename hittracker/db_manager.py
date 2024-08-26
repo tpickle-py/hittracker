@@ -50,8 +50,11 @@ class DatabaseManager:
         )
         self.conn.commit()
 
-    def update_policy(self, firewall_name, policy_name, hit_count, date):
-        self.cursor.execute("SELECT id FROM firewalls WHERE name = ?", (firewall_name,))
+    def update_policy(self, firewall_name, device_type, policy_name, hit_count, date):
+        self.cursor.execute(
+            "SELECT id FROM firewalls WHERE name = ? AND device_type = ?",
+            (firewall_name, device_type),
+        )
         firewall_id = self.cursor.fetchone()[0]
 
         self.cursor.execute(

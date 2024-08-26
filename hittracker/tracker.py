@@ -41,9 +41,10 @@ class FirewallPolicyTracker:
             policies = plugin.pre_process_output(output)
             policies = plugin.process_output(policies)
             for policy_name, hit_count in policies:
-                self.db.update_policy(firewall_name, policy_name, hit_count, date)
+                self.db.update_policy(
+                    firewall_name, device_type, policy_name, hit_count, date
+                )
         else:
-            print(output)
             print(f"Unsupported device type for {firewall_name}")
 
     def detect_device_type(self, output):
