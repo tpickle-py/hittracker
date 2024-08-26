@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import List, Tuple
 
+
 class DevicePlugin(ABC):
     @classmethod
     @abstractmethod
@@ -11,3 +12,6 @@ class DevicePlugin(ABC):
     def process_output(self, output: str) -> List[Tuple[str, int]]:
         pass
 
+    @abstractmethod
+    def pre_process_output(self, output: str) -> str:
+        pass
