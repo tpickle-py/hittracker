@@ -1,3 +1,5 @@
 firewall_policies.db
 **/*.pyc
-*.pdf
+**/*.pdf
+**/*.log
+**/*.csv
