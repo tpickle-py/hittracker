@@ -8,7 +8,7 @@ from reportlab.platypus import (
     Paragraph,
     PageBreak,
 )
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from itertools import groupby
 
@@ -35,8 +35,6 @@ def export_to_csv(report, filename="unused_policies.csv"):
         for policy in report:
             writer.writerow(policy)
 
-    print(f"CSV report exported to {filename}")
-
 
 def generate_pdf_report(report, filename="unused_policies_report.pdf"):
     """
@@ -48,17 +46,37 @@ def generate_pdf_report(report, filename="unused_policies_report.pdf"):
     doc = SimpleDocTemplate(
         filename,
         pagesize=landscape(letter),
-        leftMargin=0.3 * inch,
-        rightMargin=0.3 * inch,
-        topMargin=0.3 * inch,
-        bottomMargin=0.3 * inch,
+        leftMargin=0.5 * inch,
+        rightMargin=0.5 * inch,
+        topMargin=0.5 * inch,
+        bottomMargin=0.5 * inch,
     )
     elements = []
 
     styles = getSampleStyleSheet()
     title_style = styles["Title"]
-    heading_style = styles["Heading2"]
+    heading_style = styles["Heading1"]
     normal_style = styles["Normal"]
+
+    # Create a custom style for table headers
+    header_style = ParagraphStyle(
+        "HeaderStyle",
+        parent=styles["Normal"],
+        fontSize=12,
+        leading=14,
+        alignment=1,  # Center alignment
+        textColor=colors.whitesmoke,
+        backColor=colors.grey,
+    )
+
+    # Create a custom style for table data
+    data_style = ParagraphStyle(
+        "DataStyle",
+        parent=styles["Normal"],
+        fontSize=9,
+        leading=12,
+        alignment=1,  # Center alignment
+    )
 
     elements.append(Paragraph("Unused Policies Report", title_style))
     elements.append(
@@ -74,48 +92,41 @@ def generate_pdf_report(report, filename="unused_policies_report.pdf"):
         elements.append(Paragraph(f"Firewall: {firewall}", heading_style))
 
         # Create the data for the table
-        data = [
-            [
-                "Policy",
-                "Last Seen Unused",
-                "First Seen Unused",
-                "Days Since Last Import",
-                "Total Days Unused",
-            ]
+        headers = [
+            "Policy",
+            "Last Seen Unused",
+            "First Seen Unused",
+            "Days Since Last Import",
+            "Total Days Unused",
         ]
+        data = [[Paragraph(header, header_style) for header in headers]]
+
         for policy in policies:
             data.append(
                 [
-                    policy["Policy"],
-                    policy["Last Seen Unused"],
-                    policy["First Seen Unused"],
-                    str(policy["Days Since Last Import"]),
-                    str(policy["Total Days Unused"]),
+                    Paragraph(policy["Policy"], data_style),
+                    Paragraph(policy["Last Seen Unused"], data_style),
+                    Paragraph(policy["First Seen Unused"], data_style),
+                    Paragraph(str(policy["Days Since Last Import"]), data_style),
+                    Paragraph(str(policy["Total Days Unused"]), data_style),
                 ]
             )
 
         # Create the table
         table = Table(
-            data, colWidths=[6.6 * inch, 0.9 * inch, 0.9 * inch, 0.7 * inch, 0.7 * inch]
+            data, colWidths=[6 * inch, 0.9 * inch, 0.9 * inch, 0.7 * inch, 0.7 * inch]
         )
         table.setStyle(
             TableStyle(
                 [
                     ("BACKGROUND", (0, 0), (-1, 0), colors.grey),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.whitesmoke),
-                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("FONTSIZE", (0, 0), (-1, 0), 10),
-                    ("BOTTOMPADDING", (0, 0), (-1, 0), 12),
                     ("BACKGROUND", (0, 1), (-1, -1), colors.beige),
                     ("TEXTCOLOR", (0, 1), (-1, -1), colors.black),
                     ("ALIGN", (0, 0), (-1, -1), "CENTER"),
                     ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
-                    ("FONTSIZE", (0, 1), (-1, -1), 10),
-                    ("TOPPADDING", (0, 1), (-1, -1), 6),
-                    ("BOTTOMPADDING", (0, 1), (-1, -1), 6),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
                     ("GRID", (0, 0), (-1, -1), 1, colors.black),
-                    ("WORDWRAP", (0, 0), (-1, -1), True),
                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                 ]
             )
