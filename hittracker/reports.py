@@ -11,16 +11,20 @@ from reportlab.platypus import (
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from itertools import groupby
+import os
 
 
-def export_to_csv(report, filename="unused_policies.csv"):
+def export_to_csv(report, filename="unused_policies.csv", dir="reports"):
     """
     Export the unused policies report to a CSV file.
 
     :param report: List of dictionaries containing policy information
     :param filename: Name of the CSV file to create
     """
-    with open(filename, "w", newline="") as csvfile:
+    if not os.path.exists(dir):
+        os.makedirs(dir)
+    save_file = os.path.join(dir, filename)
+    with open(save_file, "w", newline="") as csvfile:
         fieldnames = [
             "Firewall",
             "Policy",
@@ -36,15 +40,18 @@ def export_to_csv(report, filename="unused_policies.csv"):
             writer.writerow(policy)
 
 
-def generate_pdf_report(report, filename="unused_policies_report.pdf"):
+def generate_pdf_report(report, filename="unused_policies_report.pdf", dir="reports"):
     """
     Generate a PDF report of the unused policies, with each firewall starting on a new page.
 
     :param report: List of dictionaries containing policy information
     :param filename: Name of the PDF file to create
     """
+    if not os.path.exists(dir):
+        os.makedirs(dir)
+    save_file = os.path.join(dir, filename)
     doc = SimpleDocTemplate(
-        filename,
+        save_file,
         pagesize=landscape(letter),
         leftMargin=0.5 * inch,
         rightMargin=0.5 * inch,
