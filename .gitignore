@@ -3,3 +3,5 @@ firewall_policies.db
 **/*.pdf
 **/*.log
 **/*.csv
+*.csv
+*.pdf
