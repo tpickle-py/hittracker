@@ -3,9 +3,12 @@ import os
 from datetime import datetime
 import importlib
 import pkgutil
-from db_manager import DatabaseManager
+
+# from db_manager import DatabaseManager
+from db import DatabaseManager
 import re
 import argparse
+from reports import export_to_csv, generate_pdf_report
 
 
 class FirewallPolicyTracker:
@@ -26,7 +29,7 @@ class FirewallPolicyTracker:
             plugin_class = getattr(plugin, f"{plugin_name.capitalize()}Plugin")
             self.plugins[plugin_name] = plugin_class()
 
-    def process_firewall_output(self, firewall_name, output, date):
+    def process_firewall_output(self, firewall_name, output, date_to_use):
         device_type = self.detect_device_type(output)
         output = "\n".join(
             [
@@ -35,6 +38,8 @@ class FirewallPolicyTracker:
                 if not any(rx.match(line) for rx in self.rxp)
             ]
         )
+        if self.db.skip_import(firewall_name, device_type, date_to_use):
+            return
         if device_type in self.plugins:
             plugin = self.plugins[device_type]
             self.db.add_firewall(firewall_name, device_type)
@@ -42,7 +47,7 @@ class FirewallPolicyTracker:
             policies = plugin.process_output(policies)
             for policy_name, hit_count in policies:
                 self.db.update_policy(
-                    firewall_name, device_type, policy_name, hit_count, date
+                    firewall_name, device_type, policy_name, hit_count, date_to_use
                 )
         else:
             print(f"Unsupported device type for {firewall_name}")
@@ -62,6 +67,10 @@ class FirewallPolicyTracker:
             last_zero_hit,
             first_zero_hit,
         ) in unused_policies:
+            if type(last_zero_hit) is not str:
+                last_zero_hit = str(last_zero_hit)
+            if type(first_zero_hit) is not str:
+                first_zero_hit = str(first_zero_hit)
             days_since_last_import = (
                 datetime.now().date()
                 - datetime.strptime(last_zero_hit, "%Y-%m-%d").date()
@@ -100,7 +109,6 @@ def order_folders_by_oldest(folders):
 
 
 def get_date_from_folder(folder_name):
-    print(folder_name)
     # keep only the current folder name, do not keep the full path
     name = os.path.basename(folder_name)
     if re.match("\d{8}", name):
@@ -160,6 +168,12 @@ def param_parser():
         required=False,
         dest="rxp",
     )
+    parser.add_argument(
+        "--csv", help="Export to CSV", action="store_true", default=False
+    )
+    parser.add_argument(
+        "--pdf", help="Export to PDF", action="store_true", default=False
+    )
     return parser.parse_args()
 
 
@@ -202,19 +216,12 @@ def main():
 
                 tracker.process_firewall_output(firewall_name, output, date_to_use)
 
-    report = tracker.generate_report(days_threshold=args.days)
-
-    if report:
-        print("\nPolicies flagged for removal:")
-        for policy in report:
-            print(f"Firewall: {policy['Firewall']}, Policy: {policy['Policy']}")
-            print(f"  Last Seen Unused: {policy['Last Seen Unused']}")
-            print(f"  First Seen Unused: {policy['First Seen Unused']}")
-            print(f"  Days Since Last Import: {policy['Days Since Last Import']}")
-            print(f"  Total Days Unused: {policy['Total Days Unused']}")
-            print()
-    else:
-        print("\nNo policies flagged for removal at this time.")
+    if args.csv or args.pdf:
+        report = tracker.generate_report(days_threshold=args.days)
+    if args.csv:
+        export_to_csv(report)
+    if args.pdf:
+        generate_pdf_report(report)
 
     tracker.db.close()
 

@@ -129,5 +129,28 @@ class DatabaseManager:
         )
         return self.cursor.fetchall()
 
+    def skip_import(self, firewall_name, device_type):
+        self.cursor.execute(
+            "SELECT id FROM firewalls WHERE name = ? AND device_type = ?",
+            (firewall_name, device_type),
+        )
+        try:
+            firewall_id = self.cursor.fetchone()[0]
+        except Exception:
+            return False
+        self.cursor.execute(
+            """
+        SELECT id, current_hit_count, first_zero_hit, last_zero_hit 
+        FROM policies 
+        WHERE firewall_id = ?
+        """,
+            (firewall_id,),
+        )
+        policy_data = self.cursor.fetchall()
+        if policy_data:
+            return True
+
+        return False
+
     def close(self):
         self.conn.close()
