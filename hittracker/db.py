@@ -4,6 +4,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from functools import wraps
+from os import environ as ENV
 
 from sqlalchemy import Column, Date, ForeignKey, Integer, String, create_engine, event
 from sqlalchemy.exc import OperationalError
@@ -22,6 +23,14 @@ def retry_on_locked_database(func):
             if "database is locked" in str(e):
                 print("Database is locked. Retrying in 10 seconds...")
                 time.sleep(10)
+                return wrapper(*args, **kwargs)
+            elif "disk I/O error" in str(e):
+                print("Disk I/O error. Retrying in 20 seconds...")
+                time.sleep(20)
+                return wrapper(*args, **kwargs)
+            elif "database disk image is malformed" in str(e):
+                print("database disk image is malformed. Retrying in 20 seconds...")
+                time.sleep(20)
                 return wrapper(*args, **kwargs)
             else:
                 raise
@@ -75,10 +84,16 @@ class DatabaseManager:
     _lock = threading.Lock()
 
     def __new__(cls, db_name="firewall_policies.db"):
+        if ENV.get("DB_FILE_HT"):
+            engine = ENV["DB_FILE_HT"]
+            db_name = engine.replace(r"sqlite:///", "")
+        else:
+            engine = f"sqlite:///{db_name}"
+
         with cls._lock:
             if cls._instance is None:
                 cls._instance = super(DatabaseManager, cls).__new__(cls)
-                cls._instance.engine = create_engine(f"sqlite:///{db_name}")
+                cls._instance.engine = create_engine(engine)
                 event.listen(cls._instance.engine, "connect", enable_wal)
                 Base.metadata.create_all(cls._instance.engine)
                 cls._instance.Session = scoped_session(sessionmaker(bind=cls._instance.engine))
@@ -223,5 +238,6 @@ class DatabaseManager:
 
     def close(self):
         self.Session.remove()
+        self.engine.dispose()
         self.engine.dispose()
         self.engine.dispose()

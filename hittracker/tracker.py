@@ -17,12 +17,15 @@ from utils import (
 
 from reports import export_to_csv, generate_pdf_report
 
+DB_FILE = os.environ.get("DB_FILE_HT", "firewall_policies.db")
+
 
 class FirewallPolicyTracker:
     def __init__(self, rxp):
         from db import DatabaseManager
 
-        self.db = DatabaseManager()
+        db_file = os.environ.get("DB_FILE", "firewall_policies.db")
+        self.db = DatabaseManager(db_name=db_file)
         self.plugins = {}
         self.load_plugins()
         self.rxp = rxp
@@ -85,6 +88,7 @@ def param_parser():
     )
     parser.add_argument("--csv", help="Export to CSV", action="store_true", default=False)
     parser.add_argument("--pdf", help="Export to PDF", action="store_true", default=False)
+    parser.add_argument("--db", help="Database file", default=DB_FILE)
     return parser.parse_args()
 
 
@@ -92,11 +96,12 @@ def process_file(args, processing_dict):
     from db import DatabaseManager
 
     process_id = os.getpid()
-    firewall_name, file_path, date_to_use, rxp, plugins = args
+    firewall_name, file_path, date_to_use, rxp, plugins, db = args
     print(
         f"[{process_id}]  Processing file: {file_path} with date: {date_to_use} for firewall: {firewall_name}"
     )
-    db = DatabaseManager()
+
+    db = DatabaseManager(db_name=db)
 
     with open(file_path, "r") as f:
         output = f.read()
@@ -141,9 +146,10 @@ def detect_device_type(output, plugins):
 
 def main():
     args = param_parser()
+    os.environ["DB_FILE_HT"] = f"sqlite:///{args.db}"
+    os.environ["DB_FILE"] = args.db
     data_folder = parse_folder(args)
     rxp = compile_regex_file(args)
-
     tracker = FirewallPolicyTracker(rxp)
 
     folders = order_folders_by_oldest(
@@ -179,7 +185,9 @@ def main():
                     date_to_use = get_file_creation_date(file_path, folder_date)
                     print(f"  Processing file: {filename} with creation date: {date_to_use}")
 
-                file_args.append((firewall_name, file_path, date_to_use, rxp, tracker.plugins))
+                file_args.append(
+                    (firewall_name, file_path, date_to_use, rxp, tracker.plugins, args.db)
+                )
 
             pool.starmap(process_file, [(args, processing_dict) for args in file_args])
 
