@@ -1,12 +1,12 @@
-# db_manager.py
-from sqlalchemy import create_engine, Column, Integer, String, Date, ForeignKey
+# db.py
+from sqlalchemy import create_engine, Column, Integer, String, Date, ForeignKey, event
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship
+from sqlalchemy.orm import sessionmaker, relationship, scoped_session
 from datetime import datetime, timedelta
-
+import threading
+from contextlib import contextmanager
 
 Base = declarative_base()
-
 
 class Firewall(Base):
     __tablename__ = "firewalls"
@@ -15,7 +15,6 @@ class Firewall(Base):
     name = Column(String, unique=True)
     device_type = Column(String)
     policies = relationship("Policy", back_populates="firewall")
-
 
 class Policy(Base):
     __tablename__ = "policies"
@@ -31,7 +30,6 @@ class Policy(Base):
     firewall = relationship("Firewall", back_populates="policies")
     history = relationship("PolicyHistory", back_populates="policy")
 
-
 class PolicyHistory(Base):
     __tablename__ = "policy_history"
 
@@ -42,23 +40,46 @@ class PolicyHistory(Base):
 
     policy = relationship("Policy", back_populates="history")
 
+def enable_wal(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.close()
 
 class DatabaseManager:
-    def __init__(self, db_name="firewall_policies.db"):
-        self.engine = create_engine(f"sqlite:///{db_name}")
-        Base.metadata.create_all(self.engine)
-        self.Session = sessionmaker(bind=self.engine)
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls, db_name="firewall_policies.db"):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super(DatabaseManager, cls).__new__(cls)
+                cls._instance.engine = create_engine(f"sqlite:///{db_name}")
+                event.listen(cls._instance.engine, 'connect', enable_wal)
+                Base.metadata.create_all(cls._instance.engine)
+                cls._instance.Session = scoped_session(sessionmaker(bind=cls._instance.engine))
+        return cls._instance
+
+    @contextmanager
+    def session_scope(self):
+        session = self.Session()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
 
     def add_firewall(self, name, device_type):
-        with self.Session() as session:
+        with self.session_scope() as session:
             firewall = session.query(Firewall).filter_by(name=name).first()
             if not firewall:
                 firewall = Firewall(name=name, device_type=device_type)
                 session.add(firewall)
-                session.commit()
 
     def update_policy(self, firewall_name, device_type, policy_name, hit_count, date):
-        with self.Session() as session:
+        with self.session_scope() as session:
             firewall = (
                 session.query(Firewall)
                 .filter_by(name=firewall_name, device_type=device_type)
@@ -101,10 +122,8 @@ class DatabaseManager:
             history_entry = PolicyHistory(policy=policy, hit_count=hit_count, date=date)
             session.add(history_entry)
 
-            session.commit()
-
     def get_unused_policies(self, days_threshold):
-        with self.Session() as session:
+        with self.session_scope() as session:
             today = datetime.now().date()
             threshold_date = today - timedelta(days=days_threshold)
 
@@ -127,7 +146,7 @@ class DatabaseManager:
             return unused_policies
 
     def skip_import(self, firewall_name, device_type, file_date):
-        with self.Session() as session:
+        with self.session_scope() as session:
             firewall = (
                 session.query(Firewall)
                 .filter_by(name=firewall_name, device_type=device_type)
@@ -144,7 +163,7 @@ class DatabaseManager:
             for policy in policies:
                 if policy.last_seen >= file_date:
                     print(
-                        "Skipping import of firewall policies for {0},import older than last seen".format(
+                        "Skipping import of firewall policies for {0}, import older than last seen".format(
                             firewall_name
                         )
                     )
@@ -153,4 +172,5 @@ class DatabaseManager:
             return False
 
     def close(self):
+        self.Session.remove()
         self.engine.dispose()
