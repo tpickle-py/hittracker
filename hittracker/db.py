@@ -1,12 +1,14 @@
-# db.py
-from sqlalchemy import create_engine, Column, Integer, String, Date, ForeignKey, event
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship, scoped_session
-from datetime import datetime, timedelta
+# db_manager.py
 import threading
 from contextlib import contextmanager
+from datetime import datetime, timedelta
+
+from sqlalchemy import Column, Date, ForeignKey, Integer, String, create_engine, event
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import relationship, scoped_session, sessionmaker
 
 Base = declarative_base()
+
 
 class Firewall(Base):
     __tablename__ = "firewalls"
@@ -15,6 +17,7 @@ class Firewall(Base):
     name = Column(String, unique=True)
     device_type = Column(String)
     policies = relationship("Policy", back_populates="firewall")
+
 
 class Policy(Base):
     __tablename__ = "policies"
@@ -30,6 +33,7 @@ class Policy(Base):
     firewall = relationship("Firewall", back_populates="policies")
     history = relationship("PolicyHistory", back_populates="policy")
 
+
 class PolicyHistory(Base):
     __tablename__ = "policy_history"
 
@@ -40,10 +44,12 @@ class PolicyHistory(Base):
 
     policy = relationship("Policy", back_populates="history")
 
+
 def enable_wal(dbapi_connection, connection_record):
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.close()
+
 
 class DatabaseManager:
     _instance = None
@@ -54,7 +60,7 @@ class DatabaseManager:
             if cls._instance is None:
                 cls._instance = super(DatabaseManager, cls).__new__(cls)
                 cls._instance.engine = create_engine(f"sqlite:///{db_name}")
-                event.listen(cls._instance.engine, 'connect', enable_wal)
+                event.listen(cls._instance.engine, "connect", enable_wal)
                 Base.metadata.create_all(cls._instance.engine)
                 cls._instance.Session = scoped_session(sessionmaker(bind=cls._instance.engine))
         return cls._instance
@@ -92,9 +98,7 @@ class DatabaseManager:
                 session.flush()
 
             policy = (
-                session.query(Policy)
-                .filter_by(firewall_id=firewall.id, name=policy_name)
-                .first()
+                session.query(Policy).filter_by(firewall_id=firewall.id, name=policy_name).first()
             )
 
             if policy:
@@ -122,6 +126,27 @@ class DatabaseManager:
             history_entry = PolicyHistory(policy=policy, hit_count=hit_count, date=date)
             session.add(history_entry)
 
+            session.commit()
+
+    def get_policy_history(self, firewall_name, device_type, policy_name):
+        with self.session_scope() as session:
+            firewall = (
+                session.query(Firewall)
+                .filter_by(name=firewall_name, device_type=device_type)
+                .first()
+            )
+            if not firewall:
+                return None
+
+            policy = (
+                session.query(Policy).filter_by(firewall_id=firewall.id, name=policy_name).first()
+            )
+
+            if not policy:
+                return None
+
+            return [{"date": entry.date, "hit_count": entry.hit_count} for entry in policy.history]
+
     def get_unused_policies(self, days_threshold):
         with self.session_scope() as session:
             today = datetime.now().date()
@@ -130,6 +155,7 @@ class DatabaseManager:
             unused_policies = (
                 session.query(
                     Firewall.name.label("firewall_name"),
+                    Firewall.device_type.label("device_type"),
                     Policy.name.label("policy_name"),
                     Policy.last_zero_hit,
                     Policy.first_zero_hit,

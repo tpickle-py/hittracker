@@ -1,17 +1,12 @@
 import csv
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import letter, landscape
-from reportlab.platypus import (
-    SimpleDocTemplate,
-    Table,
-    TableStyle,
-    Paragraph,
-    PageBreak,
-)
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch
-from itertools import groupby
 import os
+from itertools import groupby
+
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import landscape, letter
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import inch
+from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Table, TableStyle
 
 
 def export_to_csv(report, filename="unused_policies.csv", dir="reports"):
@@ -105,6 +100,7 @@ def generate_pdf_report(report, filename="unused_policies_report.pdf", dir="repo
             "First Seen Unused",
             "Days Since Last Import",
             "Total Days Unused",
+            "History",
         ]
         data = [[Paragraph(header, header_style) for header in headers]]
 
@@ -116,12 +112,13 @@ def generate_pdf_report(report, filename="unused_policies_report.pdf", dir="repo
                     Paragraph(policy["First Seen Unused"], data_style),
                     Paragraph(str(policy["Days Since Last Import"]), data_style),
                     Paragraph(str(policy["Total Days Unused"]), data_style),
+                    Paragraph(str(policy["Captures"]), data_style),
                 ]
             )
 
         # Create the table
         table = Table(
-            data, colWidths=[6 * inch, 0.9 * inch, 0.9 * inch, 0.7 * inch, 0.7 * inch]
+            data, colWidths=[6 * inch, 0.8 * inch, 0.8 * inch, 0.6 * inch, 0.6 * inch, 0.8 * inch]
         )
         table.setStyle(
             TableStyle(
