@@ -1,13 +1,20 @@
-# tracker.py
 import argparse
 import importlib
 import multiprocessing
 import os
 import pkgutil
-import re
 import time
 from datetime import datetime
 from multiprocessing import Manager
+
+from utils import (
+    compile_regex_file,
+    get_date_from_folder,
+    get_file_creation_date,
+    order_folders_by_oldest,
+    parse_folder,
+)
+
 from reports import export_to_csv, generate_pdf_report
 
 
@@ -28,36 +35,6 @@ class FirewallPolicyTracker:
             plugin_class = getattr(plugin, f"{plugin_name.capitalize()}Plugin")
             self.plugins[plugin_name] = plugin_class()
 
-    def process_firewall_output(self, firewall_name, output, date_to_use):
-        device_type = self.detect_device_type(output)
-        output = "\n".join(
-            [
-                line
-                for line in output.split("\n")
-                if not any(rx.match(line) for rx in self.rxp)
-            ]
-        )
-        with self.db.session_scope() as session:
-            if self.db.skip_import(firewall_name, device_type, date_to_use):
-                return
-            if device_type in self.plugins:
-                plugin = self.plugins[device_type]
-                self.db.add_firewall(firewall_name, device_type)
-                policies = plugin.pre_process_output(output)
-                policies = plugin.process_output(policies)
-                for policy_name, hit_count in policies:
-                    self.db.update_policy(
-                        firewall_name, device_type, policy_name, hit_count, date_to_use
-                    )
-            else:
-                print(f"Unsupported device type for {firewall_name}")
-
-    def detect_device_type(self, output):
-        for plugin_name, plugin in self.plugins.items():
-            if plugin.detect_device(output):
-                return plugin_name
-        return "unknown"
-
     def generate_report(self, days_threshold):
         unused_policies = self.db.get_unused_policies(days_threshold)
         report = []
@@ -72,16 +49,12 @@ class FirewallPolicyTracker:
                 last_zero_hit = str(last_zero_hit)
             if type(first_zero_hit) is not str:
                 first_zero_hit = str(first_zero_hit)
-            captures = self.db.get_policy_history(
-                firewall_name, device_type, policy_name
-            )
+            captures = self.db.get_policy_history(firewall_name, device_type, policy_name)
             days_since_last_import = (
-                datetime.now().date()
-                - datetime.strptime(last_zero_hit, "%Y-%m-%d").date()
+                datetime.now().date() - datetime.strptime(last_zero_hit, "%Y-%m-%d").date()
             ).days
             total_days_unused = (
-                datetime.now().date()
-                - datetime.strptime(first_zero_hit, "%Y-%m-%d").date()
+                datetime.now().date() - datetime.strptime(first_zero_hit, "%Y-%m-%d").date()
             ).days
             report.append(
                 {
@@ -98,63 +71,10 @@ class FirewallPolicyTracker:
         return report
 
 
-def order_folders_by_oldest(folders):
-    for folder in folders.copy():
-        folder_date = get_date_from_folder(folder)
-        if not folder_date:
-            print(
-                f"Warning: Folder '{folder}' is not in the expected date format (MMDDYYYY). Using file creation dates."
-            )
-            folders.remove(folder)
-    return sorted(folders, key=lambda x: get_date_from_folder(x))
-
-
-def get_date_from_folder(folder_name):
-    name = os.path.basename(folder_name)
-    if re.match(r"\d{8}", name):
-        try:
-            return datetime.strptime(name, "%m%d%Y").date()
-        except ValueError:
-            return None
-
-
-def get_file_creation_date(file_path, folder_date=None):
-    if folder_date:
-        return folder_date
-    return datetime.fromtimestamp(os.path.getctime(file_path)).date()
-
-
-def parse_folder(args):
-    folder = args.folder
-    if not os.path.exists(folder):
-        raise FileNotFoundError(f"Folder '{folder}' does not exist.")
-    return folder
-
-
-def compile_regex_file(args):
-    rxp_file = args.rxp
-    rx_lst = [re.compile("^#.*")]
-    if os.path.exists(rxp_file):
-        with open(rxp_file, "r") as f:
-            lines = f.readlines()
-        for line in lines:
-            try:
-                rx_lst.append(re.compile(line.strip()))
-            except re.error:
-                print(f"Error compiling regex: {line.strip()}")
-    else:
-        print(
-            f"Error: Regex file '{rxp_file}' does not exist...skipping..using default regex"
-        )
-    return rx_lst
-
-
 def param_parser():
     parser = argparse.ArgumentParser(description="Firewall Policy Tracker")
     parser.add_argument("-f", "--folder", help="Folder to process", required=True)
-    parser.add_argument(
-        "-d", "--days", help="Days threshold for removal", type=int, default=90
-    )
+    parser.add_argument("-d", "--days", help="Days threshold for removal", type=int, default=90)
     parser.add_argument(
         "-r",
         "--rxp",
@@ -163,12 +83,8 @@ def param_parser():
         required=False,
         dest="rxp",
     )
-    parser.add_argument(
-        "--csv", help="Export to CSV", action="store_true", default=False
-    )
-    parser.add_argument(
-        "--pdf", help="Export to PDF", action="store_true", default=False
-    )
+    parser.add_argument("--csv", help="Export to CSV", action="store_true", default=False)
+    parser.add_argument("--pdf", help="Export to PDF", action="store_true", default=False)
     return parser.parse_args()
 
 
@@ -192,15 +108,13 @@ def process_file(args, processing_dict):
 
     key = (firewall_name, device_type)
     while key in processing_dict:
-        print(
-            f"[{process_id}] Waiting for {firewall_name} ({device_type}) to be available..."
-        )
+        print(f"[{process_id}] Waiting for {firewall_name} ({device_type}) to be available...")
         time.sleep(1)
 
     processing_dict[key] = True
 
     try:
-        with db.session_scope() as session:
+        with db.session_scope() as session:  # noqa: F841
             if db.skip_import(firewall_name, device_type, date_to_use):
                 return
             if device_type in plugins:
@@ -227,17 +141,18 @@ def detect_device_type(output, plugins):
 
 def main():
     args = param_parser()
-    folder = parse_folder(args)
+    data_folder = parse_folder(args)
     rxp = compile_regex_file(args)
 
     tracker = FirewallPolicyTracker(rxp)
 
-    folders = [
-        os.path.join(folder, f)
-        for f in os.listdir(folder)
-        if os.path.isdir(os.path.join(folder, f))
-    ]
-    folders = order_folders_by_oldest(folders)
+    folders = order_folders_by_oldest(
+        [
+            os.path.join(data_folder, f)
+            for f in os.listdir(data_folder)
+            if os.path.isdir(os.path.join(data_folder, f))
+        ]
+    )
 
     manager = Manager()
     processing_dict = manager.dict()
@@ -262,13 +177,9 @@ def main():
 
                 if not folder_date:
                     date_to_use = get_file_creation_date(file_path, folder_date)
-                    print(
-                        f"  Processing file: {filename} with creation date: {date_to_use}"
-                    )
+                    print(f"  Processing file: {filename} with creation date: {date_to_use}")
 
-                file_args.append(
-                    (firewall_name, file_path, date_to_use, rxp, tracker.plugins)
-                )
+                file_args.append((firewall_name, file_path, date_to_use, rxp, tracker.plugins))
 
             pool.starmap(process_file, [(args, processing_dict) for args in file_args])
 
