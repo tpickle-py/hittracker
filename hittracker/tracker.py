@@ -162,7 +162,11 @@ def param_parser():
 def process_file(args):
     from db import DatabaseManager
 
+    process_id = os.getpid()
     firewall_name, file_path, date_to_use, rxp, plugins = args
+    print(
+        f"[{process_id}]  Processing file: {file_path} with date: {date_to_use} for firewall: {firewall_name}"
+    )
     db = DatabaseManager()
 
     with open(file_path, "r") as f:

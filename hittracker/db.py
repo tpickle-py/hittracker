@@ -1,13 +1,32 @@
 # db_manager.py
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta
+from functools import wraps
 
 from sqlalchemy import Column, Date, ForeignKey, Integer, String, create_engine, event
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, scoped_session, sessionmaker
 
 Base = declarative_base()
+
+
+def retry_on_locked_database(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except OperationalError as e:
+            if "database is locked" in str(e):
+                print("Database is locked. Retrying in 10 seconds...")
+                time.sleep(10)
+                return wrapper(*args, **kwargs)
+            else:
+                raise
+
+    return wrapper
 
 
 class Firewall(Base):
@@ -77,6 +96,7 @@ class DatabaseManager:
         finally:
             session.close()
 
+    @retry_on_locked_database
     def add_firewall(self, name, device_type):
         with self.session_scope() as session:
             firewall = session.query(Firewall).filter_by(name=name).first()
@@ -84,6 +104,7 @@ class DatabaseManager:
                 firewall = Firewall(name=name, device_type=device_type)
                 session.add(firewall)
 
+    @retry_on_locked_database
     def update_policy(self, firewall_name, device_type, policy_name, hit_count, date):
         with self.session_scope() as session:
             firewall = (
@@ -128,6 +149,7 @@ class DatabaseManager:
 
             session.commit()
 
+    @retry_on_locked_database
     def get_policy_history(self, firewall_name, device_type, policy_name):
         with self.session_scope() as session:
             firewall = (
@@ -147,6 +169,7 @@ class DatabaseManager:
 
             return [{"date": entry.date, "hit_count": entry.hit_count} for entry in policy.history]
 
+    @retry_on_locked_database
     def get_unused_policies(self, days_threshold):
         with self.session_scope() as session:
             today = datetime.now().date()
@@ -171,6 +194,7 @@ class DatabaseManager:
 
             return unused_policies
 
+    @retry_on_locked_database
     def skip_import(self, firewall_name, device_type, file_date):
         with self.session_scope() as session:
             firewall = (
@@ -199,4 +223,5 @@ class DatabaseManager:
 
     def close(self):
         self.Session.remove()
+        self.engine.dispose()
         self.engine.dispose()
