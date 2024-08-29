@@ -1,8 +1,8 @@
 import re
 from typing import List, Tuple
 
-from hittracker.plugins import DevicePlugin
-from hittracker.utils import extract_file
+from plugins import DevicePlugin
+from utils import extract_file
 
 
 class AsaPlugin(DevicePlugin):
