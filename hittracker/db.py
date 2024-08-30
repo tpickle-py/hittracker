@@ -6,7 +6,16 @@ from datetime import datetime, timedelta
 from functools import wraps
 from os import environ as ENV
 
-from sqlalchemy import Column, Date, ForeignKey, Integer, String, create_engine, event
+from sqlalchemy import (
+    Column,
+    Date,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+    create_engine,
+    event,
+)
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, scoped_session, sessionmaker
@@ -42,9 +51,10 @@ class Firewall(Base):
     __tablename__ = "firewalls"
 
     id = Column(Integer, primary_key=True)
-    name = Column(String, unique=True)
+    name = Column(String)
     device_type = Column(String)
     policies = relationship("Policy", back_populates="firewall")
+    __table_args__ = (UniqueConstraint("name", "device_type", name="_name_device_type_uc"),)
 
 
 class Policy(Base):
@@ -114,7 +124,7 @@ class DatabaseManager:
     @retry_on_locked_database
     def add_firewall(self, name, device_type):
         with self.session_scope() as session:
-            firewall = session.query(Firewall).filter_by(name=name).first()
+            firewall = session.query(Firewall).filter_by(name=name, device_type=device_type).first()
             if not firewall:
                 firewall = Firewall(name=name, device_type=device_type)
                 session.add(firewall)

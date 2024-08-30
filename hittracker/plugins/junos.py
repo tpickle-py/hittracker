@@ -1,6 +1,7 @@
 import re
+from typing import List, Optional, Tuple
+
 from plugins import DevicePlugin
-from typing import List, Tuple, Optional
 
 
 class JunosPlugin(DevicePlugin):
@@ -38,16 +39,20 @@ class JunosPlugin(DevicePlugin):
         match_str = r"\S+\s(\S+\s\S+\s\S+)\s(\S+)"
         match = re.search(match_str, line)
         if match:
-            return (match.group(1), int(match.group(2)))
+            policy = match.group(1)
+            try:
+                hits = int(match.group(2))
+            except ValueError:
+                return None
+            return (policy, int(hits))
         return None
 
     def pre_process_output(self, output: str) -> str:
         # removve command
         output = re.sub(r".+show security policies hit-count.+\n", "", output)
         # remove headers
-        output = re.sub(
-            r"Index\s+From zone\s+To zone\s+Name\s+Policy count", "", output
-        )
+        output = re.sub(r"Index\s+From zone\s+To zone\s+Name\s+Policy count", "", output)
         # remove duplicate spaces
         output = re.sub(r" +", " ", output)
+        return output
         return output
