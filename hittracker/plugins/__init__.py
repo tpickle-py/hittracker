@@ -15,3 +15,7 @@ class DevicePlugin(ABC):
     @abstractmethod
     def pre_process_output(self, output: str) -> str:
         pass
+
+    @abstractmethod
+    def get_rule_details(self, rule: str, config: str) -> dict:
+        pass
