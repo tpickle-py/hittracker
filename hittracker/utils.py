@@ -4,6 +4,10 @@ from datetime import datetime
 from typing import List, Optional, Pattern, TextIO, Union
 
 
+def normalize_path(path):
+    return os.path.normpath(path).replace("\\", "/")
+
+
 def apply_clean_lines(lines, clean_lines=False):
     """
     Apply cleaning to lines.

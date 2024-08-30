@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from functools import wraps
 from os import environ as ENV
+import os
 
 from sqlalchemy import (
     Column,
@@ -19,6 +20,8 @@ from sqlalchemy import (
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, scoped_session, sessionmaker
+
+from utils import normalize_path
 
 Base = declarative_base()
 
@@ -54,7 +57,9 @@ class Firewall(Base):
     name = Column(String)
     device_type = Column(String)
     policies = relationship("Policy", back_populates="firewall")
-    __table_args__ = (UniqueConstraint("name", "device_type", name="_name_device_type_uc"),)
+    __table_args__ = (
+        UniqueConstraint("name", "device_type", name="_name_device_type_uc"),
+    )
 
 
 class Policy(Base):
@@ -83,6 +88,20 @@ class PolicyHistory(Base):
     policy = relationship("Policy", back_populates="history")
 
 
+class ProcessedFile(Base):
+    __tablename__ = "processed_files"
+
+    id = Column(Integer, primary_key=True)
+    firewall_id = Column(Integer, ForeignKey("firewalls.id"))
+    filename = Column(String)
+    processed_date = Column(Date)
+
+    firewall = relationship("Firewall")
+    __table_args__ = (
+        UniqueConstraint("firewall_id", "filename", name="_firewall_filename_uc"),
+    )
+
+
 def enable_wal(dbapi_connection, connection_record):
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
@@ -106,7 +125,9 @@ class DatabaseManager:
                 cls._instance.engine = create_engine(engine)
                 event.listen(cls._instance.engine, "connect", enable_wal)
                 Base.metadata.create_all(cls._instance.engine)
-                cls._instance.Session = scoped_session(sessionmaker(bind=cls._instance.engine))
+                cls._instance.Session = scoped_session(
+                    sessionmaker(bind=cls._instance.engine)
+                )
         return cls._instance
 
     @contextmanager
@@ -124,7 +145,11 @@ class DatabaseManager:
     @retry_on_locked_database
     def add_firewall(self, name, device_type):
         with self.session_scope() as session:
-            firewall = session.query(Firewall).filter_by(name=name, device_type=device_type).first()
+            firewall = (
+                session.query(Firewall)
+                .filter_by(name=name, device_type=device_type)
+                .first()
+            )
             if not firewall:
                 firewall = Firewall(name=name, device_type=device_type)
                 session.add(firewall)
@@ -144,7 +169,9 @@ class DatabaseManager:
                 session.flush()
 
             policy = (
-                session.query(Policy).filter_by(firewall_id=firewall.id, name=policy_name).first()
+                session.query(Policy)
+                .filter_by(firewall_id=firewall.id, name=policy_name)
+                .first()
             )
 
             if policy:
@@ -218,7 +245,9 @@ class DatabaseManager:
                     )
                     session.add(policy)
 
-                history_entry = PolicyHistory(policy=policy, hit_count=hit_count, date=date)
+                history_entry = PolicyHistory(
+                    policy=policy, hit_count=hit_count, date=date
+                )
                 session.add(history_entry)
 
             session.commit()
@@ -235,13 +264,18 @@ class DatabaseManager:
                 return None
 
             policy = (
-                session.query(Policy).filter_by(firewall_id=firewall.id, name=policy_name).first()
+                session.query(Policy)
+                .filter_by(firewall_id=firewall.id, name=policy_name)
+                .first()
             )
 
             if not policy:
                 return None
 
-            return [{"date": entry.date, "hit_count": entry.hit_count} for entry in policy.history]
+            return [
+                {"date": entry.date, "hit_count": entry.hit_count}
+                for entry in policy.history
+            ]
 
     @retry_on_locked_database
     def get_unused_policies(self, days_threshold):
@@ -269,34 +303,45 @@ class DatabaseManager:
             return unused_policies
 
     @retry_on_locked_database
-    def skip_import(self, firewall_name, device_type, file_date):
+    def add_processed_file(self, firewall_name, device_type, filename, processed_date):
         with self.session_scope() as session:
             firewall = (
                 session.query(Firewall)
                 .filter_by(name=firewall_name, device_type=device_type)
                 .first()
             )
+            if not firewall:
+                firewall = Firewall(name=firewall_name, device_type=device_type)
+                session.add(firewall)
+                session.flush()
 
+            normalized_filename = normalize_path(filename)
+            processed_file = ProcessedFile(
+                firewall_id=firewall.id,
+                filename=normalized_filename,
+                processed_date=processed_date,
+            )
+            session.add(processed_file)
+
+    @retry_on_locked_database
+    def is_file_processed(self, firewall_name, device_type, filename):
+        with self.session_scope() as session:
+            firewall = (
+                session.query(Firewall)
+                .filter_by(name=firewall_name, device_type=device_type)
+                .first()
+            )
             if not firewall:
                 return False
 
-            policies = session.query(Policy).filter_by(firewall_id=firewall.id).all()
-
-            if not policies:
-                return False
-            for policy in policies:
-                if policy.last_seen >= file_date:
-                    print(
-                        "Skipping import of firewall policies for {0}, import older than last seen".format(
-                            firewall_name
-                        )
-                    )
-                    return True
-
-            return False
+            normalized_filename = normalize_path(filename)
+            processed_file = (
+                session.query(ProcessedFile)
+                .filter_by(firewall_id=firewall.id, filename=normalized_filename)
+                .first()
+            )
+            return processed_file is not None
 
     def close(self):
         self.Session.remove()
-        self.engine.dispose()
-        self.engine.dispose()
         self.engine.dispose()

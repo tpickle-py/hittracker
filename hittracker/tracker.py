@@ -13,6 +13,7 @@ from utils import (
     get_file_creation_date,
     order_folders_by_oldest,
     parse_folder,
+    normalize_path,
 )
 
 from reports import export_to_csv, generate_pdf_report
@@ -52,12 +53,16 @@ class FirewallPolicyTracker:
                 last_zero_hit = str(last_zero_hit)
             if type(first_zero_hit) is not str:
                 first_zero_hit = str(first_zero_hit)
-            captures = self.db.get_policy_history(firewall_name, device_type, policy_name)
+            captures = self.db.get_policy_history(
+                firewall_name, device_type, policy_name
+            )
             days_since_last_import = (
-                datetime.now().date() - datetime.strptime(last_zero_hit, "%Y-%m-%d").date()
+                datetime.now().date()
+                - datetime.strptime(last_zero_hit, "%Y-%m-%d").date()
             ).days
             total_days_unused = (
-                datetime.now().date() - datetime.strptime(first_zero_hit, "%Y-%m-%d").date()
+                datetime.now().date()
+                - datetime.strptime(first_zero_hit, "%Y-%m-%d").date()
             ).days
             report.append(
                 {
@@ -77,7 +82,9 @@ class FirewallPolicyTracker:
 def param_parser():
     parser = argparse.ArgumentParser(description="Firewall Policy Tracker")
     parser.add_argument("-f", "--folder", help="Folder to process", required=True)
-    parser.add_argument("-d", "--days", help="Days threshold for removal", type=int, default=90)
+    parser.add_argument(
+        "-d", "--days", help="Days threshold for removal", type=int, default=90
+    )
     parser.add_argument(
         "-r",
         "--rxp",
@@ -86,8 +93,12 @@ def param_parser():
         required=False,
         dest="rxp",
     )
-    parser.add_argument("--csv", help="Export to CSV", action="store_true", default=False)
-    parser.add_argument("--pdf", help="Export to PDF", action="store_true", default=False)
+    parser.add_argument(
+        "--csv", help="Export to CSV", action="store_true", default=False
+    )
+    parser.add_argument(
+        "--pdf", help="Export to PDF", action="store_true", default=False
+    )
     parser.add_argument("--db", help="Database file", default=DB_FILE)
     return parser.parse_args()
 
@@ -97,35 +108,48 @@ def process_file(args, processing_dict):
 
     process_id = os.getpid()
     firewall_name, file_path, date_to_use, rxp, plugins, db = args
+    normalized_file_path = normalize_path(file_path)
     print(
-        f"[{process_id}]  Processing file: {file_path} with date: {date_to_use} for firewall: {firewall_name}"
+        f"[{process_id}]  Processing file: {normalized_file_path} with date: {date_to_use} for firewall: {firewall_name}"
     )
 
     db = DatabaseManager(db_name=db)
-
     with open(file_path, "r") as f:
         output = f.read()
 
     device_type = detect_device_type(output, plugins)
+    # Check if the file has already been processed
+    if db.is_file_processed(firewall_name, device_type, normalized_file_path):
+        print(
+            f"[{process_id}] File {normalized_file_path} has already been processed. Skipping."
+        )
+        return None
+
     output = "\n".join(
         [line for line in output.split("\n") if not any(rx.match(line) for rx in rxp)]
     )
 
     key = (firewall_name, device_type)
     while key in processing_dict:
-        print(f"[{process_id}] Waiting for {firewall_name} ({device_type}) to be available...")
+        print(
+            f"[{process_id}] Waiting for {firewall_name} ({device_type}) to be available..."
+        )
         time.sleep(1)
 
     processing_dict[key] = True
 
     try:
-        if db.skip_import(firewall_name, device_type, date_to_use):
-            return None
         if device_type in plugins:
             plugin = plugins[device_type]
             db.add_firewall(firewall_name, device_type)
             policies = plugin.pre_process_output(output)
             policies = plugin.process_output(policies)
+
+            # Mark the file as processed only if processing was successful
+            db.add_processed_file(
+                firewall_name, device_type, normalized_file_path, date_to_use
+            )
+
             return (firewall_name, device_type, policies, date_to_use)
         else:
             print(f"Unsupported device type for {firewall_name}")
@@ -165,7 +189,7 @@ def main():
     total_updates = 0
     total_folders = len(folders)
     total_firewalls = set()
-    
+
     for folder_index, folder in enumerate(folders, 1):
         folder_date = get_date_from_folder(folder)
         if folder_date:
@@ -184,23 +208,45 @@ def main():
 
                 if not folder_date:
                     date_to_use = get_file_creation_date(file_path, folder_date)
-                    print(f"  Processing file: {filename} with creation date: {date_to_use}")
+                    print(
+                        f"  Processing file: {filename} with creation date: {date_to_use}"
+                    )
 
                 file_args.append(
-                    (firewall_name, file_path, date_to_use, rxp, tracker.plugins, args.db)
+                    (
+                        firewall_name,
+                        file_path,
+                        date_to_use,
+                        rxp,
+                        tracker.plugins,
+                        args.db,
+                    )
                 )
 
-            results = pool.starmap(process_file, [(args, processing_dict) for args in file_args])
-            
+            results = pool.starmap(
+                process_file, [(args, processing_dict) for args in file_args]
+            )
+
             folder_updates = []
             folder_firewalls = set()
             for result in results:
                 if result:
                     firewall_name, device_type, policies, date_to_use = result
-                    folder_updates.extend([(firewall_name, device_type, policy_name, hit_count, date_to_use) for policy_name, hit_count in policies])
+                    folder_updates.extend(
+                        [
+                            (
+                                firewall_name,
+                                device_type,
+                                policy_name,
+                                hit_count,
+                                date_to_use,
+                            )
+                            for policy_name, hit_count in policies
+                        ]
+                    )
                     folder_firewalls.add(firewall_name)
                     total_firewalls.add(firewall_name)
-            
+
             # Perform batch update for the current folder
             if folder_updates:
                 tracker.db.batch_update_policies(folder_updates)
@@ -213,7 +259,9 @@ def main():
                 print(f"Total unique firewalls so far: {len(total_firewalls)}")
                 print(f"Progress: {folder_index}/{total_folders} folders processed")
                 print(f"Average updates per folder: {total_updates / folder_index:.2f}")
-                print(f"Average firewalls per folder: {len(total_firewalls) / folder_index:.2f}")
+                print(
+                    f"Average firewalls per folder: {len(total_firewalls) / folder_index:.2f}"
+                )
                 print("-" * 50)
 
     pool.close()
