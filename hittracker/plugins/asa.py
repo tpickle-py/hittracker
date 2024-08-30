@@ -21,7 +21,7 @@ class AsaPlugin(DevicePlugin):
         for line in output.split("\n"):
             match = re.search(r"access-list\s+(\S+\s+.*)\(hitcnt=(\d+)", line)
             if match:
-                policies.append((match.group(1), int(match.group(2))))
+                policies.append((str(match.group(1)).rstrip(), int(match.group(2))))
         return policies
 
     def pre_process_output(self, output: str) -> str:
