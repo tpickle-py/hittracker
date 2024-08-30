@@ -19,7 +19,7 @@ from sqlalchemy import (
     event,
     JSON,
 )
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, IntegrityError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, scoped_session, sessionmaker
 
@@ -46,6 +46,13 @@ def retry_on_locked_database(func):
                 print("database disk image is malformed. Retrying in 20 seconds...")
                 time.sleep(20)
                 return wrapper(*args, **kwargs)
+            else:
+                raise
+        except IntegrityError as e:
+            if "UNIQUE constraint failed" in str(e):
+                print("UNIQUE constraint failed. Discarding...")
+                time.sleep(1)
+                return None
             else:
                 raise
 
@@ -394,7 +401,81 @@ class DatabaseManager:
         return json.dumps(rule_details)
 
     def unpack_rule_details(self, packed_rule_details):
+        if isinstance(packed_rule_details, dict):
+            return packed_rule_details
         return json.loads(packed_rule_details)
+
+    @retry_on_locked_database
+    def update_policy_details(
+        self, firewall_name, device_type, policy_name, rule_details
+    ):
+        with self.session_scope() as session:
+            firewall = (
+                session.query(Firewall)
+                .filter_by(name=firewall_name, device_type=device_type)
+                .first()
+            )
+            if not firewall:
+                print(f"No firewall found for {firewall_name} ({device_type})")
+                return False
+
+            policy = (
+                session.query(Policy)
+                .filter_by(firewall_id=firewall.id, name=policy_name)
+                .first()
+            )
+            if not policy:
+                print(
+                    f"No policy found for {policy_name} on {firewall_name} ({device_type})"
+                )
+                return False
+
+            policy.rule_details = rule_details
+            print(
+                f"Updated rule details for {policy_name} on {firewall_name} ({device_type})"
+            )
+            return True
+
+    @retry_on_locked_database
+    def are_rule_details_complete(self, firewall_name, device_type):
+        with self.session_scope() as session:
+            firewall = (
+                session.query(Firewall)
+                .filter_by(name=firewall_name, device_type=device_type)
+                .first()
+            )
+            if not firewall:
+                print(f"No firewall found for {firewall_name} ({device_type})")
+                return False
+
+            policies = session.query(Policy).filter_by(firewall_id=firewall.id).all()
+
+            for policy in policies:
+                if policy.rule_details is None:
+                    return False
+
+                # Handle both string (JSON) and dictionary cases
+                if isinstance(policy.rule_details, str):
+                    try:
+                        rule_details = json.loads(policy.rule_details)
+                    except json.JSONDecodeError:
+                        print(f"Invalid JSON for policy {policy.name}")
+                        return False
+                elif isinstance(policy.rule_details, dict):
+                    rule_details = policy.rule_details
+                else:
+                    print(f"Unexpected rule_details type for policy {policy.name}")
+                    return False
+
+                # Check if any required fields are empty
+                if any(
+                    len(value) == 0
+                    for key, value in rule_details.items()
+                    if key not in ["Source Services", "Destination Services"]
+                ):
+                    return False
+
+            return True
 
     def close(self):
         self.Session.remove()

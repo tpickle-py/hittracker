@@ -57,10 +57,14 @@ class Rule:
     "Class for an ACL rule"
 
     # access-list myacl remark My best rule
-    re_hitcnt = re.compile(r"\(hitcnt=(?P<hit>\d+)\)\s+(?P<hash>\w+)\s+$", re.IGNORECASE)
+    re_hitcnt = re.compile(
+        r"\(hitcnt=(?P<hit>\d+)\)\s+(?P<hash>\w+)\s+$", re.IGNORECASE
+    )
     re_ace = re.compile(r"^\s+access-list\s\S+.+extended.*$", re.IGNORECASE)
     re_acl = re.compile(r"^access-list\s\S+.+extended.*$", re.IGNORECASE)
-    re_acl_rem = re.compile(r"^\s*access-list\s+\S+\s+remark\s+(?P<acl_rem>.*$)", re.IGNORECASE)
+    re_acl_rem = re.compile(
+        r"^\s*access-list\s+\S+\s+remark\s+(?P<acl_rem>.*$)", re.IGNORECASE
+    )
     re_line_num = re.compile(r"line\s(?P<num>\d+)", re.IGNORECASE)
     re_standard_ace = re.compile(
         r"^\s*access-list\s+\S+\s+standard\s+(?P<acl_std>.*$)", re.IGNORECASE
@@ -195,8 +199,12 @@ def parse_cisco_line(line):
         if obj.src:
             ret["Source IP"] = sub_any(obj.src)
             ret["Destination IP"] = sub_any(obj.dst)
-            ret["Source Service"] = f"{obj.proto.upper()}/{obj.src_port}" if obj.src_port else None
-            ret["Destination Service"] = f"{obj.proto.upper()}/{obj.port}" if obj.port else None
+            ret["Source Service"] = (
+                f"{obj.proto.upper()}/{obj.src_port}" if obj.src_port else None
+            )
+            ret["Destination Service"] = (
+                f"{obj.proto.upper()}/{obj.port}" if obj.port else None
+            )
             ret["Action"] = obj.action
         return ret
 
@@ -222,6 +230,10 @@ def cisco_join_parsed_lines(parsed_lines):
             for key in details.keys():
                 ret[key].append(details[key])
     for key in ret.keys():
-        ret[key] = list(set(ret[key]))
-        ret[key] = ";".join(ret[key])
+        if ret[key]:
+            ret[key] = list(set(ret[key]))
+            try:
+                ret[key] = ";".join(ret[key])
+            except TypeError:
+                ret[key] = ";".join([str(x) for x in ret[key]])
     return ret

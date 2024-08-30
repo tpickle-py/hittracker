@@ -11,7 +11,7 @@ class JunosPlugin(DevicePlugin):
 
     @classmethod
     def detect_device(cls, output: str) -> bool:
-        return bool(re.search(r"show security policies hit-count", output))
+        return not bool(re.search(r"show security policies hit-count", output))
 
     def process_output(self, output: str) -> List[str]:
         unused_policies = []

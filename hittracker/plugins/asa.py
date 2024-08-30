@@ -55,17 +55,35 @@ class AsaPlugin(DevicePlugin):
         # Need to search the config using the access-list name and line number, all matches will then be processed out to get the details.
 
         ret = {
-            "Source IPs": "",
-            "Destination IPs": "",
-            "Source Service": "",
-            "Destination Service": "",
-            "Action": "",
+            "Source IPs": [],
+            "Destination IPs": [],
+            "Source Service": [],
+            "Destination Service": [],
+            "Action": [],
         }
         # Get the first 4 words of the rule and add wildcard to match the rest of the line
-        search_str = re.compile(" ".join(rule.split()[0:4]) + r".+\n")
+
+        search_rule = (
+            "(access-list "
+            + rule.split()[0]
+            + r" line \d+ )"
+            + " ".join(rule.split()[1:4])
+            + r".+\n"
+        )
+        re_search_rule = re.compile(search_rule)
+        match = re_search_rule.search(config)
+        if match:
+            search_str = match.group(1)
+            print("*" * 5, search_str)
+            search_str = re.compile(search_str + r".+\n")
+
+        # search_str = re.compile("access-list " + " ".join(rule.split()[0:4]) + r".+\n")
+
         matches = search_str.findall(config)
         if not matches:
+            print("WARNING: No matches found for rule: ", rule)
             return ret
         # convert matches to list and parse the list
         matches = list(map(str, matches))
+        print(matches)
         return cisco_join_parsed_lines(matches)

@@ -16,6 +16,7 @@ from utils import (
     normalize_path,
     get_rule_details,
     pack_rule_details,
+    unpack_rule_details,
 )
 
 from reports import export_to_csv, generate_pdf_report
@@ -123,10 +124,14 @@ def process_file_chunk(file_chunk, rxp, plugins, db):
             output = f.read()
 
         device_type = detect_device_type(output, plugins)
-        # Check if the file has already been processed
-        if db.is_file_processed(firewall_name, device_type, normalized_file_path):
+        
+        # Check if the file has been processed and if rule details are complete
+        file_processed = db.is_file_processed(firewall_name, device_type, normalized_file_path)
+        rule_details_complete = db.are_rule_details_complete(firewall_name, device_type)
+
+        if file_processed and rule_details_complete:
             print(
-                f"[{process_id}] File {normalized_file_path} has already been processed. Skipping."
+                f"[{process_id}] File {normalized_file_path} has already been processed and rule details are complete. Skipping."
             )
             continue
 
@@ -144,21 +149,40 @@ def process_file_chunk(file_chunk, rxp, plugins, db):
             policies = plugin.pre_process_output(output)
             policies = plugin.process_output(policies)
 
-            # Get rule details for each policy
+            # Get the latest config file for the firewall
+            config_file = db.get_latest_config(firewall_name, device_type)
+            if not config_file:
+                print(f"[{process_id}] Warning: No config file found for {firewall_name}")
+                continue
+
+            with open(config_file, "r") as f:
+                config = f.read()
+
+            # Process all policies for the firewall
             policies_with_details = []
             for policy_name, hit_count in policies:
-                # get the config from db
-                config_file = db.get_latest_config(firewall_name, device_type)
-                if not config_file:
-                    print(f"Warning: No config file found for {firewall_name}")
-                    continue
-                with open(config_file, "r") as f:
-                    config = f.read()
                 rule_details = get_rule_details(plugin, policy_name, config)
+                
+                # Check if rule details are incomplete
+                if any(len(value) == 0 for key, value in rule_details.items() if key not in ['Source Services', 'Destination Services']):
+                    print(f"[{process_id}] Warning: Incomplete rule details for policy {policy_name} on {firewall_name}.")
+                    print(f"[{process_id}] Rule details: {rule_details}")
+                    print(f"[{process_id}] Attempting to reprocess rule details...")
+                    
+                    # Attempt to reprocess the rule details
+                    rule_details = get_rule_details(plugin, policy_name, config)
+                    
+                    if any(len(value) == 0 for key, value in rule_details.items() if key not in ['Source Services', 'Destination Services']):
+                        print(f"[{process_id}] Warning: Still incomplete rule details for policy {policy_name} on {firewall_name} after reprocessing.")
+                        print(f"[{process_id}] Final rule details: {rule_details}")
+                    else:
+                        print(f"[{process_id}] Successfully reprocessed rule details for policy {policy_name} on {firewall_name}.")
+
                 packed_rule_details = pack_rule_details(rule_details)
                 policies_with_details.append(
                     (policy_name, hit_count, packed_rule_details)
                 )
+                db.update_policy_details(firewall_name, device_type, policy_name, rule_details)
 
             # Mark the file as processed only if processing was successful
             db.add_processed_file(
@@ -169,7 +193,7 @@ def process_file_chunk(file_chunk, rxp, plugins, db):
                 (firewall_name, device_type, policies_with_details, date_to_use)
             )
         else:
-            print(f"Unsupported device type for {firewall_name}")
+            print(f"[{process_id}] Unsupported device type for {firewall_name}")
 
     return results
 
