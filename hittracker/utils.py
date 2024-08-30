@@ -2,6 +2,8 @@ import os
 import re
 from datetime import datetime
 from typing import List, Optional, Pattern, TextIO, Union
+from plugins import DevicePlugin
+import json
 
 
 def normalize_path(path):
@@ -127,5 +129,42 @@ def compile_regex_file(args):
             except re.error:
                 print(f"Error compiling regex: {line.strip()}")
     else:
-        print(f"Error: Regex file '{rxp_file}' does not exist...skipping..using default regex")
+        print(
+            f"Error: Regex file '{rxp_file}' does not exist...skipping..using default regex"
+        )
     return rx_lst
+
+
+def get_rule_details(plugin: DevicePlugin, rule_name, config):
+    """
+    Get additional rule details using the plugin's get_rule_details method.
+
+    :param plugin: The plugin instance
+    :param rule_name: The name of the rule to get details for
+    :return: A dictionary containing the rule details
+    """
+    try:
+        return plugin.get_rule_details(rule_name, config)
+    except AttributeError:
+        print("Warning: The plugin does not have a get_rule_details method.")
+        return {}
+
+
+def pack_rule_details(rule_details):
+    """
+    Pack rule details into a JSON string.
+
+    :param rule_details: A dictionary containing rule details
+    :return: A JSON string representation of the rule details
+    """
+    return json.dumps(rule_details)
+
+
+def unpack_rule_details(packed_rule_details):
+    """
+    Unpack a JSON string of rule details into a dictionary.
+
+    :param packed_rule_details: A JSON string containing rule details
+    :return: A dictionary of rule details
+    """
+    return json.loads(packed_rule_details)

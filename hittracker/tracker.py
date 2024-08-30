@@ -14,6 +14,8 @@ from utils import (
     order_folders_by_oldest,
     parse_folder,
     normalize_path,
+    get_rule_details,
+    pack_rule_details,
 )
 
 from reports import export_to_csv, generate_pdf_report
@@ -48,6 +50,7 @@ class FirewallPolicyTracker:
             policy_name,
             last_zero_hit,
             first_zero_hit,
+            rule_details,
         ) in unused_policies:
             if type(last_zero_hit) is not str:
                 last_zero_hit = str(last_zero_hit)
@@ -64,18 +67,18 @@ class FirewallPolicyTracker:
                 datetime.now().date()
                 - datetime.strptime(first_zero_hit, "%Y-%m-%d").date()
             ).days
-            report.append(
-                {
-                    "Firewall": firewall_name,
-                    "Policy": policy_name,
-                    "Last Seen Unused": last_zero_hit,
-                    "First Seen Unused": first_zero_hit,
-                    "Days Since Last Import": days_since_last_import,
-                    "Total Days Unused": total_days_unused,
-                    "Captures": captures,
-                    "Status": "Flagged for Removal",
-                }
-            )
+            report_entry = {
+                "Firewall": firewall_name,
+                "Policy": policy_name,
+                "Last Seen Unused": last_zero_hit,
+                "First Seen Unused": first_zero_hit,
+                "Days Since Last Import": days_since_last_import,
+                "Total Days Unused": total_days_unused,
+                "Captures": captures,
+                "Status": "Flagged for Removal",
+                "rule_details": rule_details,
+            }
+            report.append(report_entry)
         return report
 
 
@@ -103,59 +106,72 @@ def param_parser():
     return parser.parse_args()
 
 
-def process_file(args, processing_dict):
+def process_file_chunk(file_chunk, rxp, plugins, db):
     from db import DatabaseManager
 
     process_id = os.getpid()
-    firewall_name, file_path, date_to_use, rxp, plugins, db = args
-    normalized_file_path = normalize_path(file_path)
-    print(
-        f"[{process_id}]  Processing file: {normalized_file_path} with date: {date_to_use} for firewall: {firewall_name}"
-    )
-
     db = DatabaseManager(db_name=db)
-    with open(file_path, "r") as f:
-        output = f.read()
 
-    device_type = detect_device_type(output, plugins)
-    # Check if the file has already been processed
-    if db.is_file_processed(firewall_name, device_type, normalized_file_path):
+    results = []
+    for firewall_name, file_path, date_to_use in file_chunk:
+        normalized_file_path = normalize_path(file_path)
         print(
-            f"[{process_id}] File {normalized_file_path} has already been processed. Skipping."
+            f"[{process_id}]  Processing file: {normalized_file_path} with date: {date_to_use} for firewall: {firewall_name}"
         )
-        return None
 
-    output = "\n".join(
-        [line for line in output.split("\n") if not any(rx.match(line) for rx in rxp)]
-    )
+        with open(file_path, "r") as f:
+            output = f.read()
 
-    key = (firewall_name, device_type)
-    while key in processing_dict:
-        print(
-            f"[{process_id}] Waiting for {firewall_name} ({device_type}) to be available..."
+        device_type = detect_device_type(output, plugins)
+        # Check if the file has already been processed
+        if db.is_file_processed(firewall_name, device_type, normalized_file_path):
+            print(
+                f"[{process_id}] File {normalized_file_path} has already been processed. Skipping."
+            )
+            continue
+
+        output = "\n".join(
+            [
+                line
+                for line in output.split("\n")
+                if not any(rx.match(line) for rx in rxp)
+            ]
         )
-        time.sleep(1)
 
-    processing_dict[key] = True
-
-    try:
         if device_type in plugins:
             plugin = plugins[device_type]
             db.add_firewall(firewall_name, device_type)
             policies = plugin.pre_process_output(output)
             policies = plugin.process_output(policies)
 
+            # Get rule details for each policy
+            policies_with_details = []
+            for policy_name, hit_count in policies:
+                # get the config from db
+                config_file = db.get_latest_config(firewall_name, device_type)
+                if not config_file:
+                    print(f"Warning: No config file found for {firewall_name}")
+                    continue
+                with open(config_file, "r") as f:
+                    config = f.read()
+                rule_details = get_rule_details(plugin, policy_name, config)
+                packed_rule_details = pack_rule_details(rule_details)
+                policies_with_details.append(
+                    (policy_name, hit_count, packed_rule_details)
+                )
+
             # Mark the file as processed only if processing was successful
             db.add_processed_file(
                 firewall_name, device_type, normalized_file_path, date_to_use
             )
 
-            return (firewall_name, device_type, policies, date_to_use)
+            results.append(
+                (firewall_name, device_type, policies_with_details, date_to_use)
+            )
         else:
             print(f"Unsupported device type for {firewall_name}")
-            return None
-    finally:
-        del processing_dict[key]
+
+    return results
 
 
 def detect_device_type(output, plugins):
@@ -163,6 +179,11 @@ def detect_device_type(output, plugins):
         if plugin.detect_device(output):
             return plugin_name
     return "unknown"
+
+
+def chunk_files(file_list, num_chunks):
+    chunk_size = max(1, len(file_list) // num_chunks)
+    return [file_list[i : i + chunk_size] for i in range(0, len(file_list), chunk_size)]
 
 
 def main():
@@ -181,10 +202,11 @@ def main():
         ]
     )
 
-    manager = Manager()
-    processing_dict = manager.dict()
+    # Dynamically determine the number of processes
+    num_processes = max(1, multiprocessing.cpu_count() - 1)
+    print(f"Using {num_processes} processes for multiprocessing")
 
-    pool = multiprocessing.Pool(processes=6)
+    pool = multiprocessing.Pool(processes=num_processes)
 
     total_updates = 0
     total_folders = len(folders)
@@ -212,20 +234,19 @@ def main():
                         f"  Processing file: {filename} with creation date: {date_to_use}"
                     )
 
-                file_args.append(
-                    (
-                        firewall_name,
-                        file_path,
-                        date_to_use,
-                        rxp,
-                        tracker.plugins,
-                        args.db,
-                    )
-                )
+                file_args.append((firewall_name, file_path, date_to_use))
 
-            results = pool.starmap(
-                process_file, [(args, processing_dict) for args in file_args]
+            # Chunk the files
+            file_chunks = chunk_files(file_args, num_processes)
+
+            # Process chunks in parallel
+            chunk_results = pool.starmap(
+                process_file_chunk,
+                [(chunk, rxp, tracker.plugins, args.db) for chunk in file_chunks],
             )
+
+            # Flatten the results
+            results = [item for sublist in chunk_results for item in sublist]
 
             folder_updates = []
             folder_firewalls = set()
@@ -240,8 +261,9 @@ def main():
                                 policy_name,
                                 hit_count,
                                 date_to_use,
+                                rule_details,
                             )
-                            for policy_name, hit_count in policies
+                            for policy_name, hit_count, rule_details in policies
                         ]
                     )
                     folder_firewalls.add(firewall_name)

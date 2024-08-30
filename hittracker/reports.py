@@ -8,6 +8,8 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Table, TableStyle
 
+from db import DatabaseManager
+
 
 def export_to_csv(report, filename="unused_policies.csv", dir="reports"):
     """
@@ -19,20 +21,42 @@ def export_to_csv(report, filename="unused_policies.csv", dir="reports"):
     if not os.path.exists(dir):
         os.makedirs(dir)
     save_file = os.path.join(dir, filename)
+
+    db_manager = DatabaseManager()
+
+    # Get all possible rule detail keys
+    all_rule_detail_keys = set()
+    for policy in report:
+        if policy["rule_details"]:
+            rule_details = db_manager.unpack_rule_details(policy["rule_details"])
+            all_rule_detail_keys.update(rule_details.keys())
+
+    fieldnames = [
+        "Firewall",
+        "Policy",
+        "Last Seen Unused",
+        "First Seen Unused",
+        "Days Since Last Import",
+        "Total Days Unused",
+    ] + list(all_rule_detail_keys)
+
     with open(save_file, "w", newline="") as csvfile:
-        fieldnames = [
-            "Firewall",
-            "Policy",
-            "Last Seen Unused",
-            "First Seen Unused",
-            "Days Since Last Import",
-            "Total Days Unused",
-        ]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
         writer.writeheader()
         for policy in report:
-            writer.writerow(policy)
+            row = {
+                "Firewall": policy["Firewall"],
+                "Policy": policy["Policy"],
+                "Last Seen Unused": policy["Last Seen Unused"],
+                "First Seen Unused": policy["First Seen Unused"],
+                "Days Since Last Import": policy["Days Since Last Import"],
+                "Total Days Unused": policy["Total Days Unused"],
+            }
+            if policy["rule_details"]:
+                rule_details = db_manager.unpack_rule_details(policy["rule_details"])
+                row.update(rule_details)
+            writer.writerow(row)
 
 
 def generate_pdf_report(report, filename="unused_policies_report.pdf", dir="reports"):
@@ -90,6 +114,8 @@ def generate_pdf_report(report, filename="unused_policies_report.pdf", dir="repo
     sorted_report = sorted(report, key=lambda x: x["Firewall"])
     grouped_report = groupby(sorted_report, key=lambda x: x["Firewall"])
 
+    db_manager = DatabaseManager()
+
     for firewall, policies in grouped_report:
         elements.append(Paragraph(f"Firewall: {firewall}", heading_style))
 
@@ -100,26 +126,42 @@ def generate_pdf_report(report, filename="unused_policies_report.pdf", dir="repo
             "First Seen Unused",
             "Days Since Last Import",
             "Total Days Unused",
-            "History",
         ]
+
+        # Add rule detail headers
+        rule_detail_headers = set()
+        for policy in policies:
+            if policy["rule_details"]:
+                rule_details = db_manager.unpack_rule_details(policy["rule_details"])
+                rule_detail_headers.update(rule_details.keys())
+        
+        headers.extend(sorted(rule_detail_headers))
+
         data = [[Paragraph(header, header_style) for header in headers]]
 
         for policy in policies:
-            data.append(
-                [
-                    Paragraph(policy["Policy"], data_style),
-                    Paragraph(policy["Last Seen Unused"], data_style),
-                    Paragraph(policy["First Seen Unused"], data_style),
-                    Paragraph(str(policy["Days Since Last Import"]), data_style),
-                    Paragraph(str(policy["Total Days Unused"]), data_style),
-                    Paragraph(str(policy["Captures"]), data_style),
-                ]
-            )
+            row = [
+                Paragraph(policy["Policy"], data_style),
+                Paragraph(policy["Last Seen Unused"], data_style),
+                Paragraph(policy["First Seen Unused"], data_style),
+                Paragraph(str(policy["Days Since Last Import"]), data_style),
+                Paragraph(str(policy["Total Days Unused"]), data_style),
+            ]
+
+            # Add rule details
+            if policy["rule_details"]:
+                rule_details = db_manager.unpack_rule_details(policy["rule_details"])
+                for header in rule_detail_headers:
+                    value = rule_details.get(header, "")
+                    row.append(Paragraph(str(value), data_style))
+            else:
+                row.extend([Paragraph("", data_style) for _ in rule_detail_headers])
+
+            data.append(row)
 
         # Create the table
-        table = Table(
-            data, colWidths=[6 * inch, 0.8 * inch, 0.8 * inch, 0.6 * inch, 0.6 * inch, 0.8 * inch]
-        )
+        col_widths = [1.5 * inch] + [0.8 * inch] * (len(headers) - 1)
+        table = Table(data, colWidths=col_widths)
         table.setStyle(
             TableStyle(
                 [

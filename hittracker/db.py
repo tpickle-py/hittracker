@@ -1,6 +1,7 @@
 # db_manager.py
 import threading
 import time
+import json
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from functools import wraps
@@ -16,6 +17,7 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
     event,
+    JSON,
 )
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.declarative import declarative_base
@@ -72,6 +74,7 @@ class Policy(Base):
     last_seen = Column(Date)
     first_zero_hit = Column(Date)
     last_zero_hit = Column(Date)
+    rule_details = Column(JSON)  # Changed to JSON type
 
     firewall = relationship("Firewall", back_populates="policies")
     history = relationship("PolicyHistory", back_populates="policy")
@@ -155,7 +158,15 @@ class DatabaseManager:
                 session.add(firewall)
 
     @retry_on_locked_database
-    def update_policy(self, firewall_name, device_type, policy_name, hit_count, date):
+    def update_policy(
+        self,
+        firewall_name,
+        device_type,
+        policy_name,
+        hit_count,
+        date,
+        rule_details=None,
+    ):
         with self.session_scope() as session:
             firewall = (
                 session.query(Firewall)
@@ -185,6 +196,8 @@ class DatabaseManager:
                         policy.first_zero_hit = None
                 policy.current_hit_count = hit_count
                 policy.last_seen = date
+                if rule_details:
+                    policy.rule_details = rule_details
             else:
                 policy = Policy(
                     firewall_id=firewall.id,
@@ -193,6 +206,7 @@ class DatabaseManager:
                     last_seen=date,
                     first_zero_hit=date if hit_count == 0 else None,
                     last_zero_hit=date if hit_count == 0 else None,
+                    rule_details=rule_details,
                 )
                 session.add(policy)
 
@@ -205,7 +219,14 @@ class DatabaseManager:
     def batch_update_policies(self, updates):
         with self.session_scope() as session:
             for update in updates:
-                firewall_name, device_type, policy_name, hit_count, date = update
+                (
+                    firewall_name,
+                    device_type,
+                    policy_name,
+                    hit_count,
+                    date,
+                    rule_details,
+                ) = update
                 firewall = (
                     session.query(Firewall)
                     .filter_by(name=firewall_name, device_type=device_type)
@@ -234,6 +255,8 @@ class DatabaseManager:
                             policy.first_zero_hit = None
                     policy.current_hit_count = hit_count
                     policy.last_seen = date
+                    if rule_details:
+                        policy.rule_details = rule_details
                 else:
                     policy = Policy(
                         firewall_id=firewall.id,
@@ -242,6 +265,7 @@ class DatabaseManager:
                         last_seen=date,
                         first_zero_hit=date if hit_count == 0 else None,
                         last_zero_hit=date if hit_count == 0 else None,
+                        rule_details=rule_details,
                     )
                     session.add(policy)
 
@@ -290,6 +314,7 @@ class DatabaseManager:
                     Policy.name.label("policy_name"),
                     Policy.last_zero_hit,
                     Policy.first_zero_hit,
+                    Policy.rule_details,
                 )
                 .join(Policy)
                 .filter(
@@ -341,6 +366,35 @@ class DatabaseManager:
                 .first()
             )
             return processed_file is not None
+
+    @retry_on_locked_database
+    def get_latest_config(self, firewall_name, device_type):
+        with self.session_scope() as session:
+            firewall = (
+                session.query(Firewall)
+                .filter_by(name=firewall_name, device_type=device_type)
+                .first()
+            )
+            if not firewall:
+                print("No firewall found")
+                return None
+
+            latest_config = (
+                session.query(ProcessedFile)
+                .filter_by(firewall_id=firewall.id)
+                .order_by(ProcessedFile.processed_date.desc())
+                .first()
+            )
+            result = latest_config.filename if latest_config else None
+            if not result:
+                print("No latest config found")
+            return result
+
+    def pack_rule_details(self, rule_details):
+        return json.dumps(rule_details)
+
+    def unpack_rule_details(self, packed_rule_details):
+        return json.loads(packed_rule_details)
 
     def close(self):
         self.Session.remove()
