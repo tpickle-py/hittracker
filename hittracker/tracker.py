@@ -119,20 +119,17 @@ def process_file(args, processing_dict):
     processing_dict[key] = True
 
     try:
-        with db.session_scope() as session:  # noqa: F841
-            if db.skip_import(firewall_name, device_type, date_to_use):
-                return
-            if device_type in plugins:
-                plugin = plugins[device_type]
-                db.add_firewall(firewall_name, device_type)
-                policies = plugin.pre_process_output(output)
-                policies = plugin.process_output(policies)
-                for policy_name, hit_count in policies:
-                    db.update_policy(
-                        firewall_name, device_type, policy_name, hit_count, date_to_use
-                    )
-            else:
-                print(f"Unsupported device type for {firewall_name}")
+        if db.skip_import(firewall_name, device_type, date_to_use):
+            return None
+        if device_type in plugins:
+            plugin = plugins[device_type]
+            db.add_firewall(firewall_name, device_type)
+            policies = plugin.pre_process_output(output)
+            policies = plugin.process_output(policies)
+            return (firewall_name, device_type, policies, date_to_use)
+        else:
+            print(f"Unsupported device type for {firewall_name}")
+            return None
     finally:
         del processing_dict[key]
 
@@ -165,7 +162,11 @@ def main():
 
     pool = multiprocessing.Pool(processes=6)
 
-    for folder in folders:
+    total_updates = 0
+    total_folders = len(folders)
+    total_firewalls = set()
+    
+    for folder_index, folder in enumerate(folders, 1):
         folder_date = get_date_from_folder(folder)
         if folder_date:
             date_to_use = folder_date
@@ -189,10 +190,41 @@ def main():
                     (firewall_name, file_path, date_to_use, rxp, tracker.plugins, args.db)
                 )
 
-            pool.starmap(process_file, [(args, processing_dict) for args in file_args])
+            results = pool.starmap(process_file, [(args, processing_dict) for args in file_args])
+            
+            folder_updates = []
+            folder_firewalls = set()
+            for result in results:
+                if result:
+                    firewall_name, device_type, policies, date_to_use = result
+                    folder_updates.extend([(firewall_name, device_type, policy_name, hit_count, date_to_use) for policy_name, hit_count in policies])
+                    folder_firewalls.add(firewall_name)
+                    total_firewalls.add(firewall_name)
+            
+            # Perform batch update for the current folder
+            if folder_updates:
+                tracker.db.batch_update_policies(folder_updates)
+                num_updates = len(folder_updates)
+                total_updates += num_updates
+                print(f"Batch update completed for folder: {folder}")
+                print(f"Number of updates in this folder: {num_updates}")
+                print(f"Number of firewalls in this folder: {len(folder_firewalls)}")
+                print(f"Total updates so far: {total_updates}")
+                print(f"Total unique firewalls so far: {len(total_firewalls)}")
+                print(f"Progress: {folder_index}/{total_folders} folders processed")
+                print(f"Average updates per folder: {total_updates / folder_index:.2f}")
+                print(f"Average firewalls per folder: {len(total_firewalls) / folder_index:.2f}")
+                print("-" * 50)
 
     pool.close()
     pool.join()
+
+    print("\nFinal Statistics:")
+    print(f"Total number of updates: {total_updates}")
+    print(f"Total number of folders processed: {total_folders}")
+    print(f"Total number of unique firewalls: {len(total_firewalls)}")
+    print(f"Average updates per folder: {total_updates / total_folders:.2f}")
+    print(f"Average firewalls per folder: {len(total_firewalls) / total_folders:.2f}")
 
     if args.csv or args.pdf:
         report = tracker.generate_report(days_threshold=args.days)

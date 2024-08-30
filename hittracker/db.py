@@ -175,6 +175,55 @@ class DatabaseManager:
             session.commit()
 
     @retry_on_locked_database
+    def batch_update_policies(self, updates):
+        with self.session_scope() as session:
+            for update in updates:
+                firewall_name, device_type, policy_name, hit_count, date = update
+                firewall = (
+                    session.query(Firewall)
+                    .filter_by(name=firewall_name, device_type=device_type)
+                    .first()
+                )
+
+                if not firewall:
+                    firewall = Firewall(name=firewall_name, device_type=device_type)
+                    session.add(firewall)
+                    session.flush()
+
+                policy = (
+                    session.query(Policy)
+                    .filter_by(firewall_id=firewall.id, name=policy_name)
+                    .first()
+                )
+
+                if policy:
+                    if hit_count == 0:
+                        if policy.current_hit_count > 0:
+                            policy.first_zero_hit = date
+                        policy.last_zero_hit = date
+                    else:
+                        policy.last_zero_hit = None
+                        if policy.current_hit_count == 0:
+                            policy.first_zero_hit = None
+                    policy.current_hit_count = hit_count
+                    policy.last_seen = date
+                else:
+                    policy = Policy(
+                        firewall_id=firewall.id,
+                        name=policy_name,
+                        current_hit_count=hit_count,
+                        last_seen=date,
+                        first_zero_hit=date if hit_count == 0 else None,
+                        last_zero_hit=date if hit_count == 0 else None,
+                    )
+                    session.add(policy)
+
+                history_entry = PolicyHistory(policy=policy, hit_count=hit_count, date=date)
+                session.add(history_entry)
+
+            session.commit()
+
+    @retry_on_locked_database
     def get_policy_history(self, firewall_name, device_type, policy_name):
         with self.session_scope() as session:
             firewall = (
