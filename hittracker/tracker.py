@@ -138,6 +138,7 @@ def process_file_chunk(file_chunk, rxp, plugins, db):
 
         with open(file_path, "r") as f:
             output = f.read()
+            config = output[::]
 
         device_type = detect_device_type(output, plugins)
 
