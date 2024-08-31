@@ -129,7 +129,7 @@ class Rule:
             self.src = f"{arr[0]} {arr[1]}"
             del arr[0:2]
         # Source ports
-        # print(self.line)
+        # logger.debug(self.line)
         if "range" in arr[0]:  # pragma: no cover
             # test for ip
             regex_ip = re.match(Rule.re_ip, arr[1])
@@ -185,7 +185,7 @@ class Rule:
 
 
 def parse_cisco_line(line):
-    # print(line)
+    # logger.debug(line)
     sed = re.sub(r"\< |\> ", "", line)
     ret = {
         "Source IP": "",

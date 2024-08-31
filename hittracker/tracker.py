@@ -4,6 +4,7 @@ import multiprocessing
 import os
 import pkgutil
 import time
+import logging
 from datetime import datetime
 from multiprocessing import Manager
 
@@ -22,6 +23,9 @@ from utils import (
 from reports import export_to_csv, generate_pdf_report
 
 DB_FILE = os.environ.get("DB_FILE_HT", "firewall_policies.db")
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 
 class FirewallPolicyTracker:
@@ -104,7 +108,19 @@ def param_parser():
         "--pdf", help="Export to PDF", action="store_true", default=False
     )
     parser.add_argument("--db", help="Database file", default=DB_FILE)
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", help="Enable debug logging"
+    )
     return parser.parse_args()
+
+
+def setup_logging(verbose):
+    log_level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[logging.FileHandler("log.txt"), logging.StreamHandler()],
+    )
 
 
 def process_file_chunk(file_chunk, rxp, plugins, db):
@@ -116,7 +132,7 @@ def process_file_chunk(file_chunk, rxp, plugins, db):
     results = []
     for firewall_name, file_path, date_to_use in file_chunk:
         normalized_file_path = normalize_path(file_path)
-        print(
+        logger.info(
             f"[{process_id}]  Processing file: {normalized_file_path} with date: {date_to_use} for firewall: {firewall_name}"
         )
 
@@ -124,13 +140,15 @@ def process_file_chunk(file_chunk, rxp, plugins, db):
             output = f.read()
 
         device_type = detect_device_type(output, plugins)
-        
+
         # Check if the file has been processed and if rule details are complete
-        file_processed = db.is_file_processed(firewall_name, device_type, normalized_file_path)
+        file_processed = db.is_file_processed(
+            firewall_name, device_type, normalized_file_path
+        )
         rule_details_complete = db.are_rule_details_complete(firewall_name, device_type)
 
         if file_processed and rule_details_complete:
-            print(
+            logger.info(
                 f"[{process_id}] File {normalized_file_path} has already been processed and rule details are complete. Skipping."
             )
             continue
@@ -152,7 +170,9 @@ def process_file_chunk(file_chunk, rxp, plugins, db):
             # Get the latest config file for the firewall
             config_file = db.get_latest_config(firewall_name, device_type)
             if not config_file:
-                print(f"[{process_id}] Warning: No config file found for {firewall_name}")
+                logger.warning(
+                    f"[{process_id}] Warning: No config file found for {firewall_name}"
+                )
                 continue
 
             with open(config_file, "r") as f:
@@ -162,27 +182,47 @@ def process_file_chunk(file_chunk, rxp, plugins, db):
             policies_with_details = []
             for policy_name, hit_count in policies:
                 rule_details = get_rule_details(plugin, policy_name, config)
-                
+
                 # Check if rule details are incomplete
-                if any(len(value) == 0 for key, value in rule_details.items() if key not in ['Source Services', 'Destination Services']):
-                    print(f"[{process_id}] Warning: Incomplete rule details for policy {policy_name} on {firewall_name}.")
-                    print(f"[{process_id}] Rule details: {rule_details}")
-                    print(f"[{process_id}] Attempting to reprocess rule details...")
-                    
+                if any(
+                    len(value) == 0
+                    for key, value in rule_details.items()
+                    if key not in ["Source Services", "Destination Services"]
+                ):
+                    logger.warning(
+                        f"[{process_id}] Warning: Incomplete rule details for policy {policy_name} on {firewall_name}."
+                    )
+                    logger.debug(f"[{process_id}] Rule details: {rule_details}")
+                    logger.info(
+                        f"[{process_id}] Attempting to reprocess rule details..."
+                    )
+
                     # Attempt to reprocess the rule details
                     rule_details = get_rule_details(plugin, policy_name, config)
-                    
-                    if any(len(value) == 0 for key, value in rule_details.items() if key not in ['Source Services', 'Destination Services']):
-                        print(f"[{process_id}] Warning: Still incomplete rule details for policy {policy_name} on {firewall_name} after reprocessing.")
-                        print(f"[{process_id}] Final rule details: {rule_details}")
+
+                    if any(
+                        len(value) == 0
+                        for key, value in rule_details.items()
+                        if key not in ["Source Services", "Destination Services"]
+                    ):
+                        logger.warning(
+                            f"[{process_id}] Warning: Still incomplete rule details for policy {policy_name} on {firewall_name} after reprocessing."
+                        )
+                        logger.debug(
+                            f"[{process_id}] Final rule details: {rule_details}"
+                        )
                     else:
-                        print(f"[{process_id}] Successfully reprocessed rule details for policy {policy_name} on {firewall_name}.")
+                        logger.info(
+                            f"[{process_id}] Successfully reprocessed rule details for policy {policy_name} on {firewall_name}."
+                        )
 
                 packed_rule_details = pack_rule_details(rule_details)
                 policies_with_details.append(
                     (policy_name, hit_count, packed_rule_details)
                 )
-                db.update_policy_details(firewall_name, device_type, policy_name, rule_details)
+                db.update_policy_details(
+                    firewall_name, device_type, policy_name, rule_details
+                )
 
             # Mark the file as processed only if processing was successful
             db.add_processed_file(
@@ -193,7 +233,9 @@ def process_file_chunk(file_chunk, rxp, plugins, db):
                 (firewall_name, device_type, policies_with_details, date_to_use)
             )
         else:
-            print(f"[{process_id}] Unsupported device type for {firewall_name}")
+            logger.warning(
+                f"[{process_id}] Unsupported device type for {firewall_name}"
+            )
 
     return results
 
@@ -212,6 +254,8 @@ def chunk_files(file_list, num_chunks):
 
 def main():
     args = param_parser()
+    setup_logging(args.verbose)
+
     os.environ["DB_FILE_HT"] = f"sqlite:///{args.db}"
     os.environ["DB_FILE"] = args.db
     data_folder = parse_folder(args)
@@ -228,7 +272,7 @@ def main():
 
     # Dynamically determine the number of processes
     num_processes = max(1, multiprocessing.cpu_count() - 1)
-    print(f"Using {num_processes} processes for multiprocessing")
+    logger.info(f"Using {num_processes} processes for multiprocessing")
 
     pool = multiprocessing.Pool(processes=num_processes)
 
@@ -240,9 +284,9 @@ def main():
         folder_date = get_date_from_folder(folder)
         if folder_date:
             date_to_use = folder_date
-            print(f"Processing folder: {folder} with date: {date_to_use}")
+            logger.info(f"Processing folder: {folder} with date: {date_to_use}")
         else:
-            print(
+            logger.warning(
                 f"Warning: Folder '{folder}' is not in the expected date format (MMDDYYYY). Using file creation dates."
             )
 
@@ -254,7 +298,7 @@ def main():
 
                 if not folder_date:
                     date_to_use = get_file_creation_date(file_path, folder_date)
-                    print(
+                    logger.info(
                         f"  Processing file: {filename} with creation date: {date_to_use}"
                     )
 
@@ -298,27 +342,35 @@ def main():
                 tracker.db.batch_update_policies(folder_updates)
                 num_updates = len(folder_updates)
                 total_updates += num_updates
-                print(f"Batch update completed for folder: {folder}")
-                print(f"Number of updates in this folder: {num_updates}")
-                print(f"Number of firewalls in this folder: {len(folder_firewalls)}")
-                print(f"Total updates so far: {total_updates}")
-                print(f"Total unique firewalls so far: {len(total_firewalls)}")
-                print(f"Progress: {folder_index}/{total_folders} folders processed")
-                print(f"Average updates per folder: {total_updates / folder_index:.2f}")
-                print(
+                logger.info(f"Batch update completed for folder: {folder}")
+                logger.info(f"Number of updates in this folder: {num_updates}")
+                logger.info(
+                    f"Number of firewalls in this folder: {len(folder_firewalls)}"
+                )
+                logger.info(f"Total updates so far: {total_updates}")
+                logger.info(f"Total unique firewalls so far: {len(total_firewalls)}")
+                logger.info(
+                    f"Progress: {folder_index}/{total_folders} folders processed"
+                )
+                logger.info(
+                    f"Average updates per folder: {total_updates / folder_index:.2f}"
+                )
+                logger.info(
                     f"Average firewalls per folder: {len(total_firewalls) / folder_index:.2f}"
                 )
-                print("-" * 50)
+                logger.info("-" * 50)
 
     pool.close()
     pool.join()
 
-    print("\nFinal Statistics:")
-    print(f"Total number of updates: {total_updates}")
-    print(f"Total number of folders processed: {total_folders}")
-    print(f"Total number of unique firewalls: {len(total_firewalls)}")
-    print(f"Average updates per folder: {total_updates / total_folders:.2f}")
-    print(f"Average firewalls per folder: {len(total_firewalls) / total_folders:.2f}")
+    logger.info("\nFinal Statistics:")
+    logger.info(f"Total number of updates: {total_updates}")
+    logger.info(f"Total number of folders processed: {total_folders}")
+    logger.info(f"Total number of unique firewalls: {len(total_firewalls)}")
+    logger.info(f"Average updates per folder: {total_updates / total_folders:.2f}")
+    logger.info(
+        f"Average firewalls per folder: {len(total_firewalls) / total_folders:.2f}"
+    )
 
     if args.csv or args.pdf:
         report = tracker.generate_report(days_threshold=args.days)

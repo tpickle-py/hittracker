@@ -2,6 +2,7 @@
 import threading
 import time
 import json
+import logging
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from functools import wraps
@@ -25,6 +26,10 @@ from sqlalchemy.orm import relationship, scoped_session, sessionmaker
 
 from utils import normalize_path
 
+# Set up logging
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
 Base = declarative_base()
 
 
@@ -35,22 +40,22 @@ def retry_on_locked_database(func):
             return func(*args, **kwargs)
         except OperationalError as e:
             if "database is locked" in str(e):
-                print("Database is locked. Retrying in 10 seconds...")
+                logger.info("Database is locked. Retrying in 10 seconds...")
                 time.sleep(10)
                 return wrapper(*args, **kwargs)
             elif "disk I/O error" in str(e):
-                print("Disk I/O error. Retrying in 20 seconds...")
+                logger.info("Disk I/O error. Retrying in 20 seconds...")
                 time.sleep(20)
                 return wrapper(*args, **kwargs)
             elif "database disk image is malformed" in str(e):
-                print("database disk image is malformed. Retrying in 20 seconds...")
+                logger.info("database disk image is malformed. Retrying in 20 seconds...")
                 time.sleep(20)
                 return wrapper(*args, **kwargs)
             else:
                 raise
         except IntegrityError as e:
             if "UNIQUE constraint failed" in str(e):
-                print("UNIQUE constraint failed. Discarding...")
+                logger.info("UNIQUE constraint failed. Discarding...")
                 time.sleep(1)
                 return None
             else:
@@ -383,7 +388,7 @@ class DatabaseManager:
                 .first()
             )
             if not firewall:
-                print("No firewall found")
+                logger.info("No firewall found")
                 return None
 
             latest_config = (
@@ -394,7 +399,7 @@ class DatabaseManager:
             )
             result = latest_config.filename if latest_config else None
             if not result:
-                print("No latest config found")
+                logger.info("No latest config found")
             return result
 
     def pack_rule_details(self, rule_details):
@@ -416,7 +421,7 @@ class DatabaseManager:
                 .first()
             )
             if not firewall:
-                print(f"No firewall found for {firewall_name} ({device_type})")
+                logger.info(f"No firewall found for {firewall_name} ({device_type})")
                 return False
 
             policy = (
@@ -425,13 +430,13 @@ class DatabaseManager:
                 .first()
             )
             if not policy:
-                print(
+                logger.info(
                     f"No policy found for {policy_name} on {firewall_name} ({device_type})"
                 )
                 return False
 
             policy.rule_details = rule_details
-            print(
+            logger.info(
                 f"Updated rule details for {policy_name} on {firewall_name} ({device_type})"
             )
             return True
@@ -445,7 +450,7 @@ class DatabaseManager:
                 .first()
             )
             if not firewall:
-                print(f"No firewall found for {firewall_name} ({device_type})")
+                logger.info(f"No firewall found for {firewall_name} ({device_type})")
                 return False
 
             policies = session.query(Policy).filter_by(firewall_id=firewall.id).all()
@@ -459,12 +464,12 @@ class DatabaseManager:
                     try:
                         rule_details = json.loads(policy.rule_details)
                     except json.JSONDecodeError:
-                        print(f"Invalid JSON for policy {policy.name}")
+                        logger.info(f"Invalid JSON for policy {policy.name}")
                         return False
                 elif isinstance(policy.rule_details, dict):
                     rule_details = policy.rule_details
                 else:
-                    print(f"Unexpected rule_details type for policy {policy.name}")
+                    logger.info(f"Unexpected rule_details type for policy {policy.name}")
                     return False
 
                 # Check if any required fields are empty

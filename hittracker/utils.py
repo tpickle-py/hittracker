@@ -1,10 +1,12 @@
 import os
 import re
+import logging
 from datetime import datetime
 from typing import List, Optional, Pattern, TextIO, Union
 from plugins import DevicePlugin
 import json
 
+logger = logging.getLogger(__name__)
 
 def normalize_path(path):
     return os.path.normpath(path).replace("\\", "/")
@@ -88,7 +90,7 @@ def order_folders_by_oldest(folders):
     for folder in folders.copy():
         folder_date = get_date_from_folder(folder)
         if not folder_date:
-            print(
+            logger.warning(
                 f"Warning: Folder '{folder}' is not in the expected date format (MMDDYYYY). Using file creation dates."
             )
             folders.remove(folder)
@@ -127,9 +129,9 @@ def compile_regex_file(args):
             try:
                 rx_lst.append(re.compile(line.strip()))
             except re.error:
-                print(f"Error compiling regex: {line.strip()}")
+                logger.error(f"Error compiling regex: {line.strip()}")
     else:
-        print(
+        logger.error(
             f"Error: Regex file '{rxp_file}' does not exist...skipping..using default regex"
         )
     return rx_lst
@@ -146,7 +148,7 @@ def get_rule_details(plugin: DevicePlugin, rule_name, config):
     try:
         return plugin.get_rule_details(rule_name, config)
     except AttributeError:
-        print("Warning: The plugin does not have a get_rule_details method.")
+        logger.warning("Warning: The plugin does not have a get_rule_details method.")
         return {}
 
 

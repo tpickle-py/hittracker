@@ -1,5 +1,6 @@
 import csv
 import os
+import logging
 from itertools import groupby
 
 from reportlab.lib import colors
@@ -10,6 +11,7 @@ from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Table, T
 
 from db import DatabaseManager
 
+logger = logging.getLogger(__name__)
 
 def export_to_csv(report, filename="unused_policies.csv", dir="reports"):
     """
@@ -57,6 +59,8 @@ def export_to_csv(report, filename="unused_policies.csv", dir="reports"):
                 rule_details = db_manager.unpack_rule_details(policy["rule_details"])
                 row.update(rule_details)
             writer.writerow(row)
+    
+    logger.info(f"CSV report exported to {save_file}")
 
 
 def generate_pdf_report(report, filename="unused_policies_report.pdf", dir="reports"):
@@ -182,3 +186,4 @@ def generate_pdf_report(report, filename="unused_policies_report.pdf", dir="repo
         elements.append(PageBreak())
 
     doc.build(elements)
+    logger.info(f"PDF report generated at {save_file}")
